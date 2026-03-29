@@ -1,0 +1,52 @@
+package config
+
+import "testing"
+
+func TestParseDCIPList(t *testing.T) {
+	got, err := ParseDCIPList([]string{"2:149.154.167.220", "4:149.154.167.220"})
+	if err != nil {
+		t.Fatalf("ParseDCIPList returned error: %v", err)
+	}
+
+	if got[2] != "149.154.167.220" {
+		t.Fatalf("unexpected dc 2 ip: %q", got[2])
+	}
+	if got[4] != "149.154.167.220" {
+		t.Fatalf("unexpected dc 4 ip: %q", got[4])
+	}
+}
+
+func TestParseDCIPListRejectsInvalidInput(t *testing.T) {
+	cases := [][]string{
+		{"2"},
+		{"x:149.154.167.220"},
+		{"2:not-an-ip"},
+	}
+
+	for _, tc := range cases {
+		if _, err := ParseDCIPList(tc); err == nil {
+			t.Fatalf("expected error for %v", tc)
+		}
+	}
+}
+
+func TestDefaultIncludesCommonWSDCs(t *testing.T) {
+	cfg := Default()
+
+	if cfg.PoolSize != 1 {
+		t.Fatalf("unexpected default pool size: %d", cfg.PoolSize)
+	}
+
+	want := map[int]string{
+		1: "149.154.175.205",
+		2: "149.154.167.220",
+		4: "149.154.167.220",
+		5: "91.108.56.100",
+	}
+
+	for dc, ip := range want {
+		if got := cfg.DCIPs[dc]; got != ip {
+			t.Fatalf("unexpected default dc %d ip: got %q want %q", dc, got, ip)
+		}
+	}
+}

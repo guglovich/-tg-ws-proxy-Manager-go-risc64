@@ -1,0 +1,128 @@
+package telegram
+
+import (
+	"encoding/binary"
+	"net"
+)
+
+type Endpoint struct {
+	DC      int
+	IsMedia bool
+}
+
+var ipRanges = [][2]uint32{
+	{mustIPv4ToUint32("185.76.151.0"), mustIPv4ToUint32("185.76.151.255")},
+	{mustIPv4ToUint32("149.154.160.0"), mustIPv4ToUint32("149.154.175.255")},
+	{mustIPv4ToUint32("91.105.192.0"), mustIPv4ToUint32("91.105.193.255")},
+	{mustIPv4ToUint32("91.108.0.0"), mustIPv4ToUint32("91.108.255.255")},
+}
+
+var IPToDC = map[string]Endpoint{
+	"149.154.175.50": {DC: 1, IsMedia: false},
+	"149.154.175.51": {DC: 1, IsMedia: false},
+	"149.154.175.53": {DC: 1, IsMedia: false},
+	"149.154.175.54": {DC: 1, IsMedia: false},
+	"149.154.175.52": {DC: 1, IsMedia: true},
+	"149.154.167.41": {DC: 2, IsMedia: false},
+	"149.154.167.50": {DC: 2, IsMedia: false},
+	"149.154.167.51": {DC: 2, IsMedia: false},
+	"149.154.167.220": {DC: 2, IsMedia: false},
+	"95.161.76.100":  {DC: 2, IsMedia: false},
+	"149.154.167.151": {DC: 2, IsMedia: true},
+	"149.154.167.222": {DC: 2, IsMedia: true},
+	"149.154.167.223": {DC: 2, IsMedia: true},
+	"149.154.162.123": {DC: 2, IsMedia: true},
+	"149.154.175.100": {DC: 3, IsMedia: false},
+	"149.154.175.101": {DC: 3, IsMedia: false},
+	"149.154.175.102": {DC: 3, IsMedia: true},
+	"149.154.167.91":  {DC: 4, IsMedia: false},
+	"149.154.167.92":  {DC: 4, IsMedia: false},
+	"149.154.164.250": {DC: 4, IsMedia: true},
+	"149.154.166.120": {DC: 4, IsMedia: true},
+	"149.154.166.121": {DC: 4, IsMedia: true},
+	"149.154.167.118": {DC: 4, IsMedia: true},
+	"149.154.165.111": {DC: 4, IsMedia: true},
+	"91.108.56.100":   {DC: 5, IsMedia: false},
+	"91.108.56.101":   {DC: 5, IsMedia: false},
+	"91.108.56.116":   {DC: 5, IsMedia: false},
+	"91.108.56.126":   {DC: 5, IsMedia: false},
+	"149.154.171.5":   {DC: 5, IsMedia: false},
+	"91.108.56.102":   {DC: 5, IsMedia: true},
+	"91.108.56.128":   {DC: 5, IsMedia: true},
+	"91.108.56.151":   {DC: 5, IsMedia: true},
+	"91.105.192.100":  {DC: 203, IsMedia: false},
+}
+
+var DCOverrides = map[int]int{
+	203: 2,
+}
+
+func IsTelegramIP(ip string) bool {
+	n, ok := ipv4ToUint32(ip)
+	if !ok {
+		return false
+	}
+	for _, r := range ipRanges {
+		if r[0] <= n && n <= r[1] {
+			return true
+		}
+	}
+	return false
+}
+
+func LookupEndpoint(ip string) (Endpoint, bool) {
+	ep, ok := IPToDC[ip]
+	return ep, ok
+}
+
+func WSDomains(dc int, isMedia bool) []string {
+	dc = overrideDC(dc)
+	if isMedia {
+		return []string{"kws" + itoa(dc) + "-1.web.telegram.org", "kws" + itoa(dc) + ".web.telegram.org"}
+	}
+	return []string{"kws" + itoa(dc) + ".web.telegram.org", "kws" + itoa(dc) + "-1.web.telegram.org"}
+}
+
+func overrideDC(dc int) int {
+	if mapped, ok := DCOverrides[dc]; ok {
+		return mapped
+	}
+	return dc
+}
+
+func mustIPv4ToUint32(value string) uint32 {
+	n, ok := ipv4ToUint32(value)
+	if !ok {
+		panic("invalid IPv4 literal: " + value)
+	}
+	return n
+}
+
+func ipv4ToUint32(value string) (uint32, bool) {
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return 0, false
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return 0, false
+	}
+	return binary.BigEndian.Uint32(ip4), true
+}
+
+func itoa(v int) string {
+	if v == 0 {
+		return "0"
+	}
+	if v < 0 {
+		return "-" + itoa(-v)
+	}
+	var buf [20]byte
+	i := len(buf)
+	for v > 0 {
+		i--
+		buf[i] = byte('0' + v%10)
+		v /= 10
+	}
+	return string(buf[i:])
+}

@@ -31,6 +31,27 @@ func TestLookupEndpointAdditionalDC2Host(t *testing.T) {
 	}
 }
 
+func TestLookupEndpointAdditionalTelegramCallHosts(t *testing.T) {
+	testCases := []struct {
+		ip   string
+		dc   int
+		name string
+	}{
+		{ip: "149.154.167.255", dc: 2, name: "dc2 call host"},
+		{ip: "149.154.175.211", dc: 1, name: "dc1 call host"},
+	}
+
+	for _, tc := range testCases {
+		ep, ok := LookupEndpoint(tc.ip)
+		if !ok {
+			t.Fatalf("expected lookup to succeed for %s", tc.name)
+		}
+		if ep.DC != tc.dc || ep.IsMedia {
+			t.Fatalf("unexpected endpoint for %s: %+v", tc.name, ep)
+		}
+	}
+}
+
 func TestLookupEndpointIPv6(t *testing.T) {
 	ep, ok := LookupEndpoint("2001:67c:4e8:f002::7")
 	if !ok {

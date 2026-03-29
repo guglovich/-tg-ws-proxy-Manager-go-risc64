@@ -401,6 +401,75 @@ func TestHandleConnDC203UsesDC2OverrideTargetAndPatchedInit(t *testing.T) {
 	}
 }
 
+func TestHandleConnAdditionalTelegramCallHostsUseKnownDCMappings(t *testing.T) {
+	t.Run("dc2 host routes through websocket target", func(t *testing.T) {
+		var got struct {
+			targetIP string
+			dc       int
+			isMedia  bool
+		}
+
+		srv := NewServer(config.Default(), log.New(io.Discard, "", 0))
+		srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+			got.targetIP = targetIP
+			got.dc = dc
+			got.isMedia = isMedia
+			clientConn, peerConn := net.Pipe()
+			go func() { _ = peerConn.Close() }()
+			return wsbridge.NewClient(clientConn), nil
+		}
+
+		init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 0)
+		runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.167.255", 443), init, func(reply []byte) {
+			if reply[1] != 0x00 {
+				t.Fatalf("unexpected socks reply status: %d", reply[1])
+			}
+		})
+
+		if got.targetIP != "149.154.167.220" || got.dc != 2 || got.isMedia {
+			t.Fatalf("unexpected websocket route: %+v", got)
+		}
+	})
+
+	t.Run("dc1 host routes through dc target fallback", func(t *testing.T) {
+		var got struct {
+			host string
+			port int
+			init []byte
+		}
+
+		srv := NewServer(config.Default(), log.New(io.Discard, "", 0))
+		srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+			t.Fatal("did not expect websocket dial for dc1 host")
+			return nil, nil
+		}
+		srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+			got.host = host
+			got.port = port
+			got.init = append([]byte(nil), init...)
+			return nil
+		}
+
+		init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 0)
+		runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.175.211", 443), init, func(reply []byte) {
+			if reply[1] != 0x00 {
+				t.Fatalf("unexpected socks reply status: %d", reply[1])
+			}
+		})
+
+		if got.host != "149.154.175.205" || got.port != 443 {
+			t.Fatalf("unexpected tcp fallback target: %s:%d", got.host, got.port)
+		}
+		info, err := mtproto.ParseInit(got.init)
+		if err != nil {
+			t.Fatalf("expected patched init to parse, got %v", err)
+		}
+		if info.DC != 1 || info.IsMedia {
+			t.Fatalf("expected patched init to use dc1 non-media, got %+v", info)
+		}
+	})
+}
+
 func TestChoosePatchedDC(t *testing.T) {
 	if got := choosePatchedDC(5, true); got != -5 {
 		t.Fatalf("unexpected media patched dc: %d", got)

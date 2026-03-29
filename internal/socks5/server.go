@@ -251,12 +251,14 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	isMedia := info.IsMedia
 	proto := info.Proto
 	initPatched := false
+	inferredFromDestination := false
 	s.debugf("[%s] mtproto init parsed: dc=%d media=%v proto=0x%08x", clientAddr, dc, isMedia, proto)
 
 	if dc == 0 {
 		if endpoint, ok := telegram.LookupEndpoint(req.DstHost); ok {
 			dc = endpoint.DC
 			isMedia = endpoint.IsMedia
+			inferredFromDestination = true
 			s.debugf("[%s] dc inferred from destination ip: dc=%d media=%v", clientAddr, dc, isMedia)
 			if _, ok := s.cfg.DCIPs[dc]; ok {
 				patched, patchErr := mtproto.PatchInitDC(init, choosePatchedDC(dc, isMedia))
@@ -290,7 +292,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	fallbackHost := req.DstHost
-	if isIPv6 || effectiveDC != dc || routeByInitOnly {
+	if isIPv6 || effectiveDC != dc || routeByInitOnly || inferredFromDestination {
 		fallbackHost = targetIP
 		s.debugf("[%s] telegram route will fallback via dc target %s", clientAddr, targetIP)
 	}

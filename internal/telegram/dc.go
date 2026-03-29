@@ -24,6 +24,7 @@ var IPToDC = map[string]Endpoint{
 	"149.154.175.53": {DC: 1, IsMedia: false},
 	"149.154.175.54": {DC: 1, IsMedia: false},
 	"149.154.175.52": {DC: 1, IsMedia: true},
+	"149.154.167.35": {DC: 2, IsMedia: false},
 	"149.154.167.41": {DC: 2, IsMedia: false},
 	"149.154.167.50": {DC: 2, IsMedia: false},
 	"149.154.167.51": {DC: 2, IsMedia: false},

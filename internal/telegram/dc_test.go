@@ -21,6 +21,16 @@ func TestLookupEndpoint(t *testing.T) {
 	}
 }
 
+func TestLookupEndpointAdditionalDC2Host(t *testing.T) {
+	ep, ok := LookupEndpoint("149.154.167.35")
+	if !ok {
+		t.Fatal("expected additional dc2 endpoint lookup to succeed")
+	}
+	if ep.DC != 2 || ep.IsMedia {
+		t.Fatalf("unexpected additional endpoint: %+v", ep)
+	}
+}
+
 func TestLookupEndpointIPv6(t *testing.T) {
 	ep, ok := LookupEndpoint("2001:67c:4e8:f002::7")
 	if !ok {

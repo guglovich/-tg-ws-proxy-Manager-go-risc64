@@ -23,6 +23,10 @@ else
 fi
 
 APP_NAME="tg-ws-proxy"
+REPO_OWNER="${REPO_OWNER:-d0mhate}"
+REPO_NAME="${REPO_NAME:--tg-ws-proxy-Manager-go}"
+BINARY_NAME="${BINARY_NAME:-tg-ws-proxy-openwrt}"
+RELEASE_URL="${RELEASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download/$BINARY_NAME}"
 SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
 INSTALL_DIR="${INSTALL_DIR:-/tmp/tg-ws-proxy-go}"
 BIN_PATH="${BIN_PATH:-$INSTALL_DIR/tg-ws-proxy}"
@@ -134,20 +138,42 @@ show_status() {
     printf "  process   : %s\n" "$run_state"
     printf "  pid       : %s\n" "$pid"
     printf "  source    : %s\n" "$SOURCE_BIN"
+    printf "  release   : %s\n" "$RELEASE_URL"
     printf "  installed : %s\n" "$BIN_PATH"
     printf "  listen    : %s:%s\n" "$LISTEN_HOST" "$LISTEN_PORT"
     printf "  mode      : terminal logs only\n"
     printf "  verbose   : %s\n" "$verbose_state"
 }
 
+download_binary() {
+    mkdir -p "$(dirname "$SOURCE_BIN")" || return 1
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -O "$SOURCE_BIN" "$RELEASE_URL"
+        return $?
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -L --fail -o "$SOURCE_BIN" "$RELEASE_URL"
+        return $?
+    fi
+
+    return 1
+}
+
 install_binary() {
     if [ ! -f "$SOURCE_BIN" ]; then
         show_header
-        printf "%sSource binary not found%s\n\n" "$C_RED" "$C_RESET"
-        printf "Expected file:\n  %s\n\n" "$SOURCE_BIN"
-        printf "Copy your build there first.\n"
-        pause
-        return 1
+        printf "%sLocal binary not found%s\n\n" "$C_YELLOW" "$C_RESET"
+        printf "Trying to download from GitHub Release\n"
+        printf "%s\n\n" "$RELEASE_URL"
+        if ! download_binary; then
+            printf "%sDownload failed%s\n\n" "$C_RED" "$C_RESET"
+            printf "You can also place the binary here manually\n"
+            printf "  %s\n" "$SOURCE_BIN"
+            pause
+            return 1
+        fi
     fi
 
     mkdir -p "$INSTALL_DIR" || return 1
@@ -156,6 +182,7 @@ install_binary() {
 
     show_header
     printf "%sBinary installed%s\n\n" "$C_GREEN" "$C_RESET"
+    printf "Source:\n  %s\n\n" "$SOURCE_BIN"
     printf "Installed to:\n  %s\n" "$BIN_PATH"
     pause
 }
@@ -247,9 +274,10 @@ show_quick_only() {
 remove_all() {
     stop_running >/dev/null 2>&1 || true
     rm -rf "$INSTALL_DIR"
+    rm -f "$SOURCE_BIN"
 
     show_header
-    printf "%sBinary and runtime files removed%s\n" "$C_GREEN" "$C_RESET"
+    printf "%sBinary and downloaded files removed%s\n" "$C_GREEN" "$C_RESET"
     pause
 }
 

@@ -77,30 +77,21 @@ go build ./cmd/tg-ws-proxy
 
 ## Быстрый старт на роутере
 
-Собрать OpenWrt бинарник
+Поставить manager script на роутер
 
 ```bash
-mkdir -p build
-GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt ./cmd/tg-ws-proxy
+wget -O /tmp/tg-ws-proxy-go.sh https://raw.githubusercontent.com/d0mhate/-tg-ws-proxy-Manager-go/main/tg-ws-proxy-go.sh
+sh /tmp/tg-ws-proxy-go.sh
 ```
 
-Закинуть на роутер
+Дальше внутри script можно просто выбрать `Install or update binary`
+
+Если нужен запуск без меню
 
 ```bash
-scp build/tg-ws-proxy-openwrt tg-ws-proxy-go.sh root@ROUTER_IP:/tmp/
-```
-
-Запустить manager script
-
-```bash
-ssh root@ROUTER_IP 'sh /tmp/tg-ws-proxy-go.sh'
-```
-
-Или без меню
-
-```bash
-ssh root@ROUTER_IP 'sh /tmp/tg-ws-proxy-go.sh install'
-ssh root@ROUTER_IP 'sh /tmp/tg-ws-proxy-go.sh start'
+wget -O /tmp/tg-ws-proxy-go.sh https://raw.githubusercontent.com/d0mhate/-tg-ws-proxy-Manager-go/main/tg-ws-proxy-go.sh
+sh /tmp/tg-ws-proxy-go.sh install
+sh /tmp/tg-ws-proxy-go.sh start
 ```
 
 Во время `start` прокси работает в foreground
@@ -108,6 +99,10 @@ ssh root@ROUTER_IP 'sh /tmp/tg-ws-proxy-go.sh start'
 Логи идут прямо в терминал
 
 Остановка через `Ctrl+C`
+
+`install` сначала ищет локальный binary в `/tmp/tg-ws-proxy-openwrt`
+
+Если файла нет, script сам пробует скачать готовый OpenWrt binary из `latest release`
 
 ## Что делает tg-ws-proxy-go.sh
 
@@ -117,7 +112,8 @@ ssh root@ROUTER_IP 'sh /tmp/tg-ws-proxy-go.sh start'
 
 Он
 
-- берёт готовый бинарник из `/tmp/tg-ws-proxy-openwrt`
+- берёт локальный binary из `/tmp/tg-ws-proxy-openwrt`
+- если локального файла нет, скачивает binary из GitHub Release
 - копирует его в `/tmp/tg-ws-proxy-go/tg-ws-proxy`
 - умеет `install`
 - умеет `start`
@@ -191,6 +187,27 @@ go test ./...
 - `go test ./...`
 - `go build ./cmd/tg-ws-proxy`
 - кросс сборка `linux/mipsle`
+
+## Releases
+
+В репозитории есть release workflow
+
+Он срабатывает по тегу вида `v*`
+
+Например
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+После этого в GitHub Release появится asset
+
+```text
+tg-ws-proxy-openwrt
+```
+
+Именно его `tg-ws-proxy-go.sh` и скачивает при установке с репозитория
 
 ## Что было раньше
 

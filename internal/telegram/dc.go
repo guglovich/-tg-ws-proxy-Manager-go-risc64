@@ -111,6 +111,10 @@ func WSDomains(dc int, isMedia bool) []string {
 	return []string{"kws" + itoa(dc) + ".web.telegram.org", "kws" + itoa(dc) + "-1.web.telegram.org"}
 }
 
+func NormalizeDC(dc int) int {
+	return overrideDC(dc)
+}
+
 func overrideDC(dc int) int {
 	if mapped, ok := DCOverrides[dc]; ok {
 		return mapped

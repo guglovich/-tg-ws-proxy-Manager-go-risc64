@@ -40,3 +40,12 @@ func TestWSDomains(t *testing.T) {
 		t.Fatalf("unexpected first ws domain: %q", got[0])
 	}
 }
+
+func TestNormalizeDC(t *testing.T) {
+	if got := NormalizeDC(203); got != 2 {
+		t.Fatalf("unexpected normalized dc: %d", got)
+	}
+	if got := NormalizeDC(4); got != 4 {
+		t.Fatalf("unexpected normalized dc without override: %d", got)
+	}
+}

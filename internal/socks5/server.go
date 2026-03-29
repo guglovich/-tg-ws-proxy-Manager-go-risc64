@@ -208,10 +208,20 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		}
 	}
 
-	targetIP, ok := s.cfg.DCIPs[dc]
+	effectiveDC := telegram.NormalizeDC(dc)
+	if effectiveDC != 0 && effectiveDC != dc {
+		patched, patchErr := mtproto.PatchInitDC(init, choosePatchedDC(effectiveDC, isMedia))
+		if patchErr == nil {
+			init = patched
+			initPatched = true
+			s.debugf("[%s] normalized dc=%d -> %d and patched mtproto init", clientAddr, dc, effectiveDC)
+		}
+	}
+
+	targetIP, ok := s.cfg.DCIPs[effectiveDC]
 	if !ok || targetIP == "" {
 		s.stats.incTCPFallback()
-		s.debugf("[%s] route=tcp-fallback reason=no-dc-override dc=%d destination=%s:%d", clientAddr, dc, req.DstHost, req.DstPort)
+		s.debugf("[%s] route=tcp-fallback reason=no-dc-override dc=%d effective_dc=%d destination=%s:%d", clientAddr, dc, effectiveDC, req.DstHost, req.DstPort)
 		if err := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
 			s.logger.Printf("[%s] tcp fallback failed: %v", clientAddr, err)
 		}
@@ -219,25 +229,25 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	fallbackHost := req.DstHost
-	if isIPv6 {
+	if isIPv6 || effectiveDC != dc {
 		fallbackHost = targetIP
-		s.debugf("[%s] ipv6 telegram route will fallback via dc target %s", clientAddr, targetIP)
+		s.debugf("[%s] telegram route will fallback via dc target %s", clientAddr, targetIP)
 	}
 
-	if !isWSEnabledDC(dc) {
+	if !isWSEnabledDC(effectiveDC) {
 		s.stats.incTCPFallback()
-		s.debugf("[%s] route=tcp-fallback reason=ws-disabled-dc dc=%d target=%s", clientAddr, dc, targetIP)
+		s.debugf("[%s] route=tcp-fallback reason=ws-disabled-dc dc=%d effective_dc=%d target=%s", clientAddr, dc, effectiveDC, targetIP)
 		if err := s.proxyTCPWithInit(ctx, conn, fallbackHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
 			s.logger.Printf("[%s] tcp fallback failed: %v", clientAddr, err)
 		}
 		return
 	}
 
-	ws, err := s.connectWS(ctx, targetIP, dc, isMedia)
+	ws, err := s.connectWS(ctx, targetIP, effectiveDC, isMedia)
 	if err != nil {
-		s.logger.Printf("[%s] ws connect failed for DC%d via %s: %v", clientAddr, dc, targetIP, err)
+		s.logger.Printf("[%s] ws connect failed for DC%d via %s: %v", clientAddr, effectiveDC, targetIP, err)
 		s.stats.incTCPFallback()
-		s.debugf("[%s] route=tcp-fallback reason=%s dc=%d target=%s", clientAddr, fallbackReason(err), dc, targetIP)
+		s.debugf("[%s] route=tcp-fallback reason=%s dc=%d effective_dc=%d target=%s", clientAddr, fallbackReason(err), dc, effectiveDC, targetIP)
 		if fbErr := s.proxyTCPWithInit(ctx, conn, fallbackHost, req.DstPort, init); fbErr != nil && !errors.Is(fbErr, io.EOF) {
 			s.logger.Printf("[%s] tcp fallback failed: %v", clientAddr, fbErr)
 		}
@@ -245,7 +255,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 	defer ws.Close()
 	s.stats.incWSConnections()
-	s.debugf("[%s] route=websocket dc=%d media=%v target=%s", clientAddr, dc, isMedia, targetIP)
+	s.debugf("[%s] route=websocket dc=%d effective_dc=%d media=%v target=%s", clientAddr, dc, effectiveDC, isMedia, targetIP)
 
 	var splitter *mtproto.Splitter
 	if proto != 0 && (initPatched || isMedia || proto != mtproto.ProtoIntermediate) {

@@ -26,12 +26,14 @@ APP_NAME="tg-ws-proxy"
 LAUNCHER_NAME="${LAUNCHER_NAME:-tgm}"
 REPO_OWNER="${REPO_OWNER:-d0mhate}"
 REPO_NAME="${REPO_NAME:--tg-ws-proxy-Manager-go}"
-BINARY_NAME="${BINARY_NAME:-tg-ws-proxy-openwrt}"
+DEFAULT_BINARY_NAME="${DEFAULT_BINARY_NAME:-tg-ws-proxy-openwrt}"
+BINARY_NAME="${BINARY_NAME:-}"
 LISTEN_HOST_FROM_ENV="${LISTEN_HOST+x}"
 LISTEN_PORT_FROM_ENV="${LISTEN_PORT+x}"
 VERBOSE_FROM_ENV="${VERBOSE+x}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
-RELEASE_URL="${RELEASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download/$BINARY_NAME}"
+RELEASE_DOWNLOAD_BASE_URL="${RELEASE_DOWNLOAD_BASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download}"
+RELEASE_URL="${RELEASE_URL:-}"
 RELEASE_API_URL="${RELEASE_API_URL:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest}"
 SCRIPT_RELEASE_BASE_URL="${SCRIPT_RELEASE_BASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/download}"
 SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
@@ -73,6 +75,57 @@ is_openwrt() {
 
 openwrt_arch() {
     awk -F"'" '/DISTRIB_ARCH/ {print $2}' "$OPENWRT_RELEASE_FILE" 2>/dev/null
+}
+
+binary_name_for_arch() {
+    arch="$1"
+    case "$arch" in
+        mipsel_24kc)
+            printf "tg-ws-proxy-openwrt-mipsel_24kc"
+            ;;
+        aarch64*)
+            printf "tg-ws-proxy-openwrt-aarch64"
+            ;;
+        *)
+            printf "%s" "$DEFAULT_BINARY_NAME"
+            ;;
+    esac
+}
+
+is_supported_openwrt_arch() {
+    arch="$1"
+    case "$arch" in
+        mipsel_24kc|aarch64*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+resolved_binary_name() {
+    if [ -n "$BINARY_NAME" ]; then
+        printf "%s" "$BINARY_NAME"
+        return 0
+    fi
+
+    if is_openwrt; then
+        arch="$(openwrt_arch)"
+        if [ -n "$arch" ]; then
+            binary_name_for_arch "$arch"
+            return 0
+        fi
+    fi
+
+    printf "%s" "$DEFAULT_BINARY_NAME"
+}
+
+resolved_release_url() {
+    if [ -n "$RELEASE_URL" ]; then
+        printf "%s" "$RELEASE_URL"
+        return 0
+    fi
+
+    printf "%s/%s" "$RELEASE_DOWNLOAD_BASE_URL" "$(resolved_binary_name)"
 }
 
 tmp_available_kb() {
@@ -437,13 +490,14 @@ port_in_use() {
 }
 
 release_url_reachable() {
+    url="$(resolved_release_url)"
     if command -v wget >/dev/null 2>&1; then
-        wget --spider "$RELEASE_URL" >/dev/null 2>&1
+        wget --spider "$url" >/dev/null 2>&1
         return $?
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -I -L --fail "$RELEASE_URL" >/dev/null 2>&1
+        curl -I -L --fail "$url" >/dev/null 2>&1
         return $?
     fi
 
@@ -459,12 +513,14 @@ show_environment_checks() {
 
     arch="$(openwrt_arch)"
     if [ -n "$arch" ]; then
-        if [ "$arch" = "mipsel_24kc" ]; then
+        if is_supported_openwrt_arch "$arch"; then
             printf "%sArch detected:%s %s\n" "$C_GREEN" "$C_RESET" "$arch"
         else
-            printf "%sWarning:%s detected arch is %s and expected arch is mipsel_24kc\n" "$C_YELLOW" "$C_RESET" "$arch"
+            printf "%sWarning:%s detected arch is %s and there is no dedicated release asset mapping for it yet\n" "$C_YELLOW" "$C_RESET" "$arch"
         fi
     fi
+
+    printf "Release asset: %s\n" "$(resolved_binary_name)"
 
     free_kb="$(tmp_available_kb)"
     if [ -n "$free_kb" ]; then
@@ -532,7 +588,8 @@ show_status() {
     printf "  pid       : %s\n" "$pid"
     printf "  bin ver   : %s\n" "$version"
     printf "  source    : %s\n" "$SOURCE_BIN"
-    printf "  release   : %s\n" "$RELEASE_URL"
+    printf "  asset     : %s\n" "$(resolved_binary_name)"
+    printf "  release   : %s\n" "$(resolved_release_url)"
     printf "  tmp path  : %s\n" "$BIN_PATH"
     printf "  persist dir: %s\n" "$persistent_dir"
     printf "  persist bin: %s\n" "$persistent_bin"
@@ -581,14 +638,15 @@ install_launcher() {
 
 download_binary() {
     mkdir -p "$(dirname "$SOURCE_BIN")" || return 1
+    url="$(resolved_release_url)"
 
     if command -v wget >/dev/null 2>&1; then
-        wget -O "$SOURCE_BIN" "$RELEASE_URL"
+        wget -O "$SOURCE_BIN" "$url"
         return $?
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -L --fail -o "$SOURCE_BIN" "$RELEASE_URL"
+        curl -L --fail -o "$SOURCE_BIN" "$url"
         return $?
     fi
 
@@ -796,8 +854,9 @@ ensure_source_binary_current() {
         fi
 
         if [ "$need_download" = "1" ]; then
+            release_url="$(resolved_release_url)"
             printf "Trying to download from GitHub Release\n"
-            printf "%s\n\n" "$RELEASE_URL"
+            printf "%s\n\n" "$release_url"
             if ! release_url_reachable; then
                 if [ -f "$SOURCE_BIN" ]; then
                     printf "%sRelease URL is not reachable%s\n\n" "$C_YELLOW" "$C_RESET"

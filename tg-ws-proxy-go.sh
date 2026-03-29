@@ -30,8 +30,10 @@ BINARY_NAME="${BINARY_NAME:-tg-ws-proxy-openwrt}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
 RELEASE_URL="${RELEASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download/$BINARY_NAME}"
 RELEASE_API_URL="${RELEASE_API_URL:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest}"
+SCRIPT_RELEASE_BASE_URL="${SCRIPT_RELEASE_BASE_URL:-https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME}"
 SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
 SOURCE_VERSION_FILE="${SOURCE_VERSION_FILE:-$SOURCE_BIN.version}"
+SOURCE_MANAGER_SCRIPT="${SOURCE_MANAGER_SCRIPT:-$SOURCE_BIN.manager}"
 INSTALL_DIR="${INSTALL_DIR:-/tmp/tg-ws-proxy-go}"
 BIN_PATH="${BIN_PATH:-$INSTALL_DIR/tg-ws-proxy}"
 VERSION_FILE="${VERSION_FILE:-$INSTALL_DIR/version}"
@@ -310,7 +312,7 @@ show_current_version() {
         version="$(persistent_installed_version 2>/dev/null || true)"
     fi
     [ -n "$version" ] || version="-"
-    printf "%sCurrent version%s\n" "$C_BOLD" "$C_RESET"
+    printf "%sBinary version%s\n" "$C_BOLD" "$C_RESET"
     printf "  %s\n" "$version"
 }
 
@@ -441,7 +443,7 @@ show_status() {
     printf "  persist   : %s\n" "$persistent_state"
     printf "  process   : %s\n" "$run_state"
     printf "  pid       : %s\n" "$pid"
-    printf "  version   : %s\n" "$version"
+    printf "  bin ver   : %s\n" "$version"
     printf "  source    : %s\n" "$SOURCE_BIN"
     printf "  release   : %s\n" "$RELEASE_URL"
     printf "  tmp path  : %s\n" "$BIN_PATH"
@@ -506,6 +508,52 @@ download_binary() {
     return 1
 }
 
+script_release_url() {
+    ref="$1"
+    printf "%s/%s/%s" "$SCRIPT_RELEASE_BASE_URL" "$ref" "$PERSIST_MANAGER_NAME"
+}
+
+copy_current_manager_script() {
+    mkdir -p "$(dirname "$SOURCE_MANAGER_SCRIPT")" || return 1
+    cp "$0" "$SOURCE_MANAGER_SCRIPT" || return 1
+    chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
+}
+
+download_manager_script() {
+    ref="$1"
+    url="$(script_release_url "$ref")"
+
+    mkdir -p "$(dirname "$SOURCE_MANAGER_SCRIPT")" || return 1
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -O "$SOURCE_MANAGER_SCRIPT" "$url" >/dev/null 2>&1 || return 1
+        chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
+        return 0
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -L --fail -o "$SOURCE_MANAGER_SCRIPT" "$url" >/dev/null 2>&1 || return 1
+        chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
+        return 0
+    fi
+
+    return 1
+}
+
+ensure_source_manager_current() {
+    ref="$1"
+
+    if [ -n "$ref" ] && download_manager_script "$ref"; then
+        return 0
+    fi
+
+    if [ -x "$SOURCE_MANAGER_SCRIPT" ]; then
+        return 0
+    fi
+
+    copy_current_manager_script
+}
+
 write_source_version_file() {
     version="$1"
     [ -n "$version" ] || return 0
@@ -516,6 +564,8 @@ install_from_source() {
     mkdir -p "$INSTALL_DIR" || return 1
     cp "$SOURCE_BIN" "$BIN_PATH" || return 1
     chmod +x "$BIN_PATH" || return 1
+    cp "$SOURCE_MANAGER_SCRIPT" "$INSTALL_DIR/$PERSIST_MANAGER_NAME" || return 1
+    chmod +x "$INSTALL_DIR/$PERSIST_MANAGER_NAME" || return 1
 
     version="$(cached_source_version 2>/dev/null || true)"
     if [ -n "$version" ]; then
@@ -527,7 +577,7 @@ install_from_source() {
     if has_persistent_install; then
         launcher_path="$(current_launcher_path 2>/dev/null || true)"
     else
-        launcher_path="$(install_launcher "$0")" || return 1
+        launcher_path="$(install_launcher "$INSTALL_DIR/$PERSIST_MANAGER_NAME")" || return 1
     fi
     printf "%s" "$launcher_path"
 }
@@ -551,7 +601,7 @@ install_persistent_from_source() {
     mkdir -p "$install_dir" || return 1
     cp "$SOURCE_BIN" "$install_dir/tg-ws-proxy" || return 1
     chmod +x "$install_dir/tg-ws-proxy" || return 1
-    cp "$0" "$install_dir/$PERSIST_MANAGER_NAME" || return 1
+    cp "$SOURCE_MANAGER_SCRIPT" "$install_dir/$PERSIST_MANAGER_NAME" || return 1
     chmod +x "$install_dir/$PERSIST_MANAGER_NAME" || return 1
 
     version="$(cached_source_version 2>/dev/null || true)"
@@ -684,6 +734,10 @@ install_binary() {
         pause
         return 1
     fi
+    if ! ensure_source_manager_current "$(cached_source_version 2>/dev/null || true)"; then
+        pause
+        return 1
+    fi
 
     launcher_path="$(install_from_source)" || return 1
 
@@ -702,6 +756,10 @@ install_binary() {
 }
 
 install_persistent_binary() {
+    if ! ensure_source_manager_current "$(cached_source_version 2>/dev/null || true)"; then
+        return 1
+    fi
+
     need_kb="$(required_persistent_kb)"
     target_dir="$(select_persistent_dir "$need_kb" 2>/dev/null || true)"
     if [ -z "$target_dir" ]; then
@@ -770,6 +828,11 @@ update_binary() {
         return 1
     fi
     write_source_version_file "$latest_tag" || return 1
+    if ! ensure_source_manager_current "$latest_tag"; then
+        printf "%sManager script update failed%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
     launcher_path="$(install_from_source)" || return 1
     if has_persistent_install; then
         persist_dir="$(persistent_install_dir 2>/dev/null || true)"
@@ -990,6 +1053,7 @@ remove_all() {
         rm -rf "$persist_dir"
     fi
     rm -f "$SOURCE_BIN" "$SOURCE_VERSION_FILE"
+    rm -f "$SOURCE_MANAGER_SCRIPT"
     rm -rf "$PERSIST_STATE_DIR"
     rm -f "$INIT_SCRIPT_PATH"
     rm -f "$LAUNCHER_PATH" "/tmp/$LAUNCHER_NAME"

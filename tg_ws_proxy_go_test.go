@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +35,7 @@ func managerEnv(t *testing.T) []string {
 	root := t.TempDir()
 	sourceBin := filepath.Join(root, "source", "tg-ws-proxy-openwrt")
 	sourceVersion := sourceBin + ".version"
+	sourceManager := filepath.Join(root, "source", "tg-ws-proxy-go.sh")
 	releaseAPI := filepath.Join(root, "release.json")
 	installDir := filepath.Join(root, "tmp-install")
 	persistStateDir := filepath.Join(root, "persist-state")
@@ -43,19 +46,28 @@ func managerEnv(t *testing.T) []string {
 	openwrtRelease := filepath.Join(root, "etc", "openwrt_release")
 	persistA := filepath.Join(root, "persist-a")
 	persistB := filepath.Join(root, "persist-b")
+	scriptBase := filepath.Join(root, "scripts")
+	scriptReleasePath := filepath.Join(scriptBase, "v9.9.9", "tg-ws-proxy-go.sh")
 
 	writeFile(t, sourceBin, "#!/bin/sh\nexit 0\n", 0o755)
 	writeFile(t, sourceVersion, "v9.9.9\n", 0o644)
 	writeFile(t, releaseAPI, "{\"tag_name\":\"v9.9.9\"}\n", 0o644)
 	writeFile(t, rcCommonPath, "#!/bin/sh\nscript=\"$1\"\ncmd=\"$2\"\nname=\"$(basename \"$script\")\"\nrc_dir=\"${RC_D_DIR:-/etc/rc.d}\"\nmkdir -p \"$rc_dir\"\ncase \"$cmd\" in\nenable)\n  ln -sf \"$script\" \"$rc_dir/S95$name\"\n  ;;\ndisable)\n  rm -f \"$rc_dir\"/*\"$name\"\n  ;;\nstop)\n  exit 0\n  ;;\n*)\n  exit 0\n  ;;\nesac\n", 0o755)
 	writeFile(t, openwrtRelease, "DISTRIB_ID='OpenWrt'\nDISTRIB_ARCH='mipsel_24kc'\n", 0o644)
+	managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
+	if err != nil {
+		t.Fatalf("read manager script: %v", err)
+	}
+	writeFile(t, scriptReleasePath, string(managerScript), 0o755)
 
 	env := append([]string{}, os.Environ()...)
 	env = append(env,
 		"RELEASE_API_URL=file://"+releaseAPI,
 		"RELEASE_URL=file://"+sourceBin,
+		"SCRIPT_RELEASE_BASE_URL=file://"+scriptBase,
 		"SOURCE_BIN="+sourceBin,
 		"SOURCE_VERSION_FILE="+sourceVersion,
+		"SOURCE_MANAGER_SCRIPT="+sourceManager,
 		"INSTALL_DIR="+installDir,
 		"BIN_PATH="+filepath.Join(installDir, "tg-ws-proxy"),
 		"VERSION_FILE="+filepath.Join(installDir, "version"),
@@ -245,6 +257,53 @@ func TestManagerEnableAutostartFailsWithoutPersistentSpace(t *testing.T) {
 	}
 	if !strings.Contains(out, "No suitable persistent path found") {
 		t.Fatalf("expected no-space message, got:\n%s", out)
+	}
+}
+
+func TestManagerUpdateRefreshesLauncherScriptFromRelease(t *testing.T) {
+	env := managerEnv(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{\"tag_name\":\"v9.9.9\"}\n"))
+		case "/binary":
+			_, _ = w.Write([]byte("#!/bin/sh\nexit 0\n"))
+		case "/v9.9.9/tg-ws-proxy-go.sh":
+			_, _ = w.Write([]byte("#!/bin/sh\necho manager-release-marker\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	var launcherPath, installDir string
+	for _, item := range env {
+		switch {
+		case strings.HasPrefix(item, "LAUNCHER_PATH="):
+			launcherPath = strings.TrimPrefix(item, "LAUNCHER_PATH=")
+		case strings.HasPrefix(item, "INSTALL_DIR="):
+			installDir = strings.TrimPrefix(item, "INSTALL_DIR=")
+		}
+	}
+	env = append(env,
+		"RELEASE_API_URL="+server.URL+"/release.json",
+		"RELEASE_URL="+server.URL+"/binary",
+		"SCRIPT_RELEASE_BASE_URL="+server.URL,
+	)
+
+	out, err := runManager(t, env, "update")
+	if err != nil {
+		t.Fatalf("update failed: %v\n%s", err, out)
+	}
+
+	tmpManagerPath := filepath.Join(installDir, "tg-ws-proxy-go.sh")
+	if got := readTrimmed(t, tmpManagerPath); !strings.Contains(got, "manager-release-marker") {
+		t.Fatalf("expected installed manager to come from release, got:\n%s", got)
+	}
+	if launcher := readTrimmed(t, launcherPath); !strings.Contains(launcher, tmpManagerPath) {
+		t.Fatalf("launcher does not point to installed manager:\n%s", launcher)
 	}
 }
 

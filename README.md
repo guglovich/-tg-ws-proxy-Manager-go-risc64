@@ -37,16 +37,21 @@ wget -O /tmp/tg-ws-proxy-go.sh https://raw.githubusercontent.com/d0mhate/-tg-ws-
 Дальше в меню обычно хватает трёх действий:
 
 1. `Setup / Update`
-2. `Start proxy`
+2. `Run proxy in terminal`
 3. `Enable autostart`, если нужен запуск после перезагрузки
 
 `Enable autostart` сам:
 
 - создаёт persistent copy, если её ещё нет
 - включает `init.d` сервис
+- сразу пытается его запустить
 - синкает текущие параметры запуска
 
 Если в постоянном хранилище роутера не хватит места, автозагрузка не включится и script напишет причину.
+
+Если persistent storage для автозапуска не хватает, можно просто запустить прокси в фоне:
+
+4. `Start in background`
 
 Без меню:
 
@@ -55,6 +60,12 @@ wget -O /tmp/tg-ws-proxy-go.sh https://raw.githubusercontent.com/d0mhate/-tg-ws-
 ```
 
 Во время `start` прокси работает в foreground, логи идут прямо в терминал, остановка через `Ctrl+C`.
+
+Для запуска в фоне без логов в текущей SSH-сессии:
+
+```bash
+sh /tmp/tg-ws-proxy-go.sh start-background
+```
 
 Script создаёт короткий launcher `tgm`. Обычно это `/usr/bin/tgm`, если туда нельзя писать, будет fallback в `/tmp/tgm`.
 
@@ -82,6 +93,7 @@ Script создаёт короткий launcher `tgm`. Обычно это `/usr
 sh tg-ws-proxy-go.sh install
 sh tg-ws-proxy-go.sh update
 sh tg-ws-proxy-go.sh start
+sh tg-ws-proxy-go.sh start-background
 sh tg-ws-proxy-go.sh stop
 sh tg-ws-proxy-go.sh restart
 sh tg-ws-proxy-go.sh enable-autostart

@@ -33,6 +33,11 @@ const (
 	statsLogEvery  = 30 * time.Second
 )
 
+var wsEnabledDCs = map[int]struct{}{
+	2: {},
+	4: {},
+}
+
 type Server struct {
 	cfg    config.Config
 	logger *log.Logger
@@ -219,6 +224,15 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		s.debugf("[%s] ipv6 telegram route will fallback via dc target %s", clientAddr, targetIP)
 	}
 
+	if !isWSEnabledDC(dc) {
+		s.stats.incTCPFallback()
+		s.debugf("[%s] route=tcp-fallback reason=ws-disabled-dc dc=%d target=%s", clientAddr, dc, targetIP)
+		if err := s.proxyTCPWithInit(ctx, conn, fallbackHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
+			s.logger.Printf("[%s] tcp fallback failed: %v", clientAddr, err)
+		}
+		return
+	}
+
 	ws, err := s.connectWS(ctx, targetIP, dc, isMedia)
 	if err != nil {
 		s.logger.Printf("[%s] ws connect failed for DC%d via %s: %v", clientAddr, dc, targetIP, err)
@@ -271,8 +285,11 @@ func (s *Server) connectWS(ctx context.Context, targetIP string, dc int, isMedia
 	}
 
 	dialCfg := s.cfg
-	if s.isCooldownActive(key) && (dialCfg.DialTimeout <= 0 || dialCfg.DialTimeout > wsFailFastDial) {
+	if dialCfg.DialTimeout <= 0 || dialCfg.DialTimeout > wsFailFastDial {
 		dialCfg.DialTimeout = wsFailFastDial
+		s.debugf("ws fail-fast timeout: dc=%d media=%v timeout=%s", dc, isMedia, dialCfg.DialTimeout)
+	}
+	if s.isCooldownActive(key) {
 		s.debugf("ws cooldown active: dc=%d media=%v timeout=%s", dc, isMedia, dialCfg.DialTimeout)
 	}
 
@@ -492,6 +509,11 @@ func isLikelyTelegramIPv6(req request, isIPv6 bool) bool {
 	default:
 		return false
 	}
+}
+
+func isWSEnabledDC(dc int) bool {
+	_, ok := wsEnabledDCs[dc]
+	return ok
 }
 
 func (s *Server) debugf(format string, args ...any) {

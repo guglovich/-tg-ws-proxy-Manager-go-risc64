@@ -143,12 +143,6 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	if ip := net.ParseIP(req.DstHost); ip != nil && ip.To4() == nil {
-		s.logger.Printf("[%s] ipv6 destination is not supported: %s", clientAddr, req.DstHost)
-		_ = writeReply(conn, 0x05)
-		return
-	}
-
 	if !telegram.IsTelegramIP(req.DstHost) {
 		s.stats.incPassthrough()
 		s.debugf("[%s] route=passthrough destination=%s:%d", clientAddr, req.DstHost, req.DstPort)

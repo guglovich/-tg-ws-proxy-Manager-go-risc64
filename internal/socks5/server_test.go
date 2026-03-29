@@ -186,13 +186,28 @@ func TestHandleConnRejectsHTTPTransport(t *testing.T) {
 	}
 }
 
-func TestHandleConnRejectsIPv6Destination(t *testing.T) {
+func TestHandleConnPassesThroughIPv6Destination(t *testing.T) {
+	var called struct {
+		host string
+		port int
+	}
+
 	srv := NewServer(config.Default(), log.New(io.Discard, "", 0))
+	srv.proxyTCPFunc = func(ctx context.Context, conn net.Conn, host string, port int) error {
+		called.host = host
+		called.port = port
+		return nil
+	}
+
 	runHandleConnFlow(t, srv, ipv6ConnectRequest(net.ParseIP("2001:db8::1")), nil, func(reply []byte) {
-		if reply[1] != 0x05 {
+		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}
 	})
+
+	if called.host != "2001:db8::1" || called.port != 443 {
+		t.Fatalf("unexpected ipv6 passthrough target: %s:%d", called.host, called.port)
+	}
 }
 
 func TestChoosePatchedDC(t *testing.T) {

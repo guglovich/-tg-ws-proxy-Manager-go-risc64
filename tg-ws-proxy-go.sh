@@ -28,9 +28,12 @@ REPO_OWNER="${REPO_OWNER:-d0mhate}"
 REPO_NAME="${REPO_NAME:--tg-ws-proxy-Manager-go}"
 BINARY_NAME="${BINARY_NAME:-tg-ws-proxy-openwrt}"
 RELEASE_URL="${RELEASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download/$BINARY_NAME}"
+RELEASE_API_URL="${RELEASE_API_URL:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest}"
 SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
+SOURCE_VERSION_FILE="${SOURCE_VERSION_FILE:-$SOURCE_BIN.version}"
 INSTALL_DIR="${INSTALL_DIR:-/tmp/tg-ws-proxy-go}"
 BIN_PATH="${BIN_PATH:-$INSTALL_DIR/tg-ws-proxy}"
+VERSION_FILE="${VERSION_FILE:-$INSTALL_DIR/version}"
 LAUNCHER_PATH="${LAUNCHER_PATH:-/usr/bin/$LAUNCHER_NAME}"
 LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
 LISTEN_PORT="${LISTEN_PORT:-1080}"
@@ -56,6 +59,36 @@ openwrt_arch() {
 
 tmp_available_kb() {
     df -k /tmp 2>/dev/null | awk 'NR==2 {print $4+0}'
+}
+
+read_first_line() {
+    file="$1"
+    [ -f "$file" ] || return 1
+    IFS= read -r line < "$file" || return 1
+    [ -n "$line" ] || return 1
+    printf "%s" "$line"
+}
+
+installed_version() {
+    read_first_line "$VERSION_FILE"
+}
+
+cached_source_version() {
+    read_first_line "$SOURCE_VERSION_FILE"
+}
+
+latest_release_tag() {
+    if command -v wget >/dev/null 2>&1; then
+        wget -qO - "$RELEASE_API_URL" 2>/dev/null | awk -F'"' '/"tag_name"/ {print $4; exit}'
+        return 0
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$RELEASE_API_URL" 2>/dev/null | awk -F'"' '/"tag_name"/ {print $4; exit}'
+        return 0
+    fi
+
+    return 1
 }
 
 telegram_host() {
@@ -133,6 +166,7 @@ show_telegram_settings() {
 show_quick_commands() {
     printf "%sQuick commands%s\n" "$C_BOLD" "$C_RESET"
     printf "  sh %s install\n" "$0"
+    printf "  sh %s update\n" "$0"
     printf "  sh %s start\n" "$0"
     printf "  sh %s stop\n" "$0"
     printf "  sh %s restart\n" "$0"
@@ -223,10 +257,14 @@ show_status() {
         verbose_state="${C_DIM}off${C_RESET}"
     fi
 
+    version="$(installed_version 2>/dev/null || true)"
+    [ -n "$version" ] || version="-"
+
     printf "%sStatus%s\n" "$C_BOLD" "$C_RESET"
     printf "  binary    : %s\n" "$install_state"
     printf "  process   : %s\n" "$run_state"
     printf "  pid       : %s\n" "$pid"
+    printf "  version   : %s\n" "$version"
     printf "  source    : %s\n" "$SOURCE_BIN"
     printf "  release   : %s\n" "$RELEASE_URL"
     printf "  installed : %s\n" "$BIN_PATH"
@@ -287,6 +325,30 @@ download_binary() {
     return 1
 }
 
+write_version_files() {
+    version="$1"
+    [ -n "$version" ] || return 0
+    mkdir -p "$INSTALL_DIR" || return 1
+    printf "%s\n" "$version" > "$SOURCE_VERSION_FILE" || return 1
+    printf "%s\n" "$version" > "$VERSION_FILE" || return 1
+}
+
+install_from_source() {
+    mkdir -p "$INSTALL_DIR" || return 1
+    cp "$SOURCE_BIN" "$BIN_PATH" || return 1
+    chmod +x "$BIN_PATH" || return 1
+
+    version="$(cached_source_version 2>/dev/null || true)"
+    if [ -n "$version" ]; then
+        printf "%s\n" "$version" > "$VERSION_FILE" || return 1
+    else
+        rm -f "$VERSION_FILE"
+    fi
+
+    launcher_path="$(install_launcher)" || return 1
+    printf "%s" "$launcher_path"
+}
+
 install_binary() {
     show_header
     show_environment_checks
@@ -301,33 +363,123 @@ install_binary() {
         return 1
     fi
 
-    if [ ! -f "$SOURCE_BIN" ]; then
-        printf "%sLocal binary not found%s\n\n" "$C_YELLOW" "$C_RESET"
-        printf "Trying to download from GitHub Release\n"
-        printf "%s\n\n" "$RELEASE_URL"
-        if ! release_url_reachable; then
-            printf "%sRelease URL is not reachable%s\n\n" "$C_RED" "$C_RESET"
-            printf "Check GitHub Release visibility or network access\n"
-            pause
-            return 1
+    latest_tag="$(latest_release_tag)"
+    if [ -n "$latest_tag" ]; then
+        cached_tag="$(cached_source_version 2>/dev/null || true)"
+        need_download="0"
+
+        if [ ! -f "$SOURCE_BIN" ]; then
+            printf "%sLocal binary not found%s\n\n" "$C_YELLOW" "$C_RESET"
+            need_download="1"
+        elif [ -z "$cached_tag" ]; then
+            printf "%sLocal binary version is unknown%s\n\n" "$C_YELLOW" "$C_RESET"
+            need_download="1"
+        elif [ "$cached_tag" != "$latest_tag" ]; then
+            printf "%sLocal binary is outdated%s\n\n" "$C_YELLOW" "$C_RESET"
+            printf "Cached version: %s\n" "$cached_tag"
+            printf "Latest version: %s\n\n" "$latest_tag"
+            need_download="1"
         fi
-        if ! download_binary; then
-            printf "%sDownload failed%s\n\n" "$C_RED" "$C_RESET"
-            printf "You can also place the binary here manually\n"
-            printf "  %s\n" "$SOURCE_BIN"
-            pause
-            return 1
+
+        if [ "$need_download" = "1" ]; then
+            printf "Trying to download from GitHub Release\n"
+            printf "%s\n\n" "$RELEASE_URL"
+            if ! release_url_reachable; then
+                if [ -f "$SOURCE_BIN" ]; then
+                    printf "%sRelease URL is not reachable%s\n\n" "$C_YELLOW" "$C_RESET"
+                    printf "Using local cached binary\n"
+                else
+                    printf "%sRelease URL is not reachable%s\n\n" "$C_RED" "$C_RESET"
+                    printf "Check GitHub Release visibility or network access\n"
+                    pause
+                    return 1
+                fi
+            else
+                rm -f "$SOURCE_BIN" "$SOURCE_VERSION_FILE"
+                if ! download_binary; then
+                    printf "%sDownload failed%s\n\n" "$C_RED" "$C_RESET"
+                    printf "You can also place the binary here manually\n"
+                    printf "  %s\n" "$SOURCE_BIN"
+                    pause
+                    return 1
+                fi
+                write_version_files "$latest_tag" || return 1
+            fi
         fi
+    elif [ ! -f "$SOURCE_BIN" ]; then
+        printf "%sCould not detect latest release version%s\n\n" "$C_RED" "$C_RESET"
+        printf "Check GitHub API access or network access\n"
+        pause
+        return 1
     fi
 
-    mkdir -p "$INSTALL_DIR" || return 1
-    cp "$SOURCE_BIN" "$BIN_PATH" || return 1
-    chmod +x "$BIN_PATH" || return 1
-    launcher_path="$(install_launcher)" || launcher_path=""
+    launcher_path="$(install_from_source)" || return 1
 
     show_header
     printf "%sBinary installed%s\n\n" "$C_GREEN" "$C_RESET"
     printf "Source:\n  %s\n\n" "$SOURCE_BIN"
+    printf "Installed to:\n  %s\n" "$BIN_PATH"
+    version="$(installed_version 2>/dev/null || true)"
+    if [ -n "$version" ]; then
+        printf "\nVersion:\n  %s\n" "$version"
+    fi
+    if [ -n "$launcher_path" ]; then
+        printf "\nLauncher:\n  %s\n" "$launcher_path"
+    fi
+    pause
+}
+
+update_binary() {
+    show_header
+    show_environment_checks
+    printf "\n"
+
+    if ! check_tmp_space; then
+        free_kb="$(tmp_available_kb)"
+        printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
+        printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
+        printf "Available: %s KB\n" "${free_kb:-unknown}"
+        pause
+        return 1
+    fi
+
+    latest_tag="$(latest_release_tag)"
+    if [ -z "$latest_tag" ]; then
+        printf "%sCould not detect latest release version%s\n\n" "$C_RED" "$C_RESET"
+        printf "Check GitHub API access or network access\n"
+        pause
+        return 1
+    fi
+
+    current_tag="$(installed_version 2>/dev/null || true)"
+    if [ -n "$current_tag" ] && [ "$current_tag" = "$latest_tag" ] && [ -x "$BIN_PATH" ]; then
+        printf "%sAlready on the latest version%s\n\n" "$C_GREEN" "$C_RESET"
+        printf "Current version: %s\n" "$current_tag"
+        pause
+        return 0
+    fi
+
+    printf "Current version: %s\n" "${current_tag:-unknown}"
+    printf "Latest version: %s\n\n" "$latest_tag"
+
+    if ! release_url_reachable; then
+        printf "%sRelease URL is not reachable%s\n\n" "$C_RED" "$C_RESET"
+        printf "Check GitHub Release visibility or network access\n"
+        pause
+        return 1
+    fi
+
+    rm -f "$SOURCE_BIN" "$SOURCE_VERSION_FILE"
+    if ! download_binary; then
+        printf "%sDownload failed%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+    write_version_files "$latest_tag" || return 1
+    launcher_path="$(install_from_source)" || return 1
+
+    show_header
+    printf "%sUpdated to %s%s\n\n" "$C_GREEN" "$latest_tag" "$C_RESET"
     printf "Installed to:\n  %s\n" "$BIN_PATH"
     if [ -n "$launcher_path" ]; then
         printf "\nLauncher:\n  %s\n" "$launcher_path"
@@ -442,7 +594,7 @@ show_quick_only() {
 remove_all() {
     stop_running >/dev/null 2>&1 || true
     rm -rf "$INSTALL_DIR"
-    rm -f "$SOURCE_BIN"
+    rm -f "$SOURCE_BIN" "$SOURCE_VERSION_FILE"
     rm -f "$LAUNCHER_PATH" "/tmp/$LAUNCHER_NAME"
 
     show_header
@@ -463,6 +615,7 @@ show_help() {
     printf "%sUsage%s\n" "$C_BOLD" "$C_RESET"
     printf "  sh %s                start menu mode\n" "$0"
     printf "  sh %s install        install or update binary\n" "$0"
+    printf "  sh %s update         update from latest release\n" "$0"
     printf "  sh %s start          run proxy in terminal\n" "$0"
     printf "  sh %s stop           stop running proxy\n" "$0"
     printf "  sh %s restart        restart proxy in terminal\n" "$0"
@@ -481,26 +634,28 @@ menu() {
     show_status
     printf "\n%sActions%s\n" "$C_BOLD" "$C_RESET"
     printf "  1) Install or update binary\n"
-    printf "  2) Run proxy in terminal\n"
-    printf "  3) Stop proxy\n"
-    printf "  4) Restart proxy in terminal\n"
-    printf "  5) Toggle verbose\n"
-    printf "  6) Show Telegram SOCKS5 settings\n"
-    printf "  7) Show quick commands\n"
-    printf "  8) Remove binary and runtime files\n"
+    printf "  2) Update from latest release\n"
+    printf "  3) Run proxy in terminal\n"
+    printf "  4) Stop proxy\n"
+    printf "  5) Restart proxy in terminal\n"
+    printf "  6) Toggle verbose\n"
+    printf "  7) Show Telegram SOCKS5 settings\n"
+    printf "  8) Show quick commands\n"
+    printf "  9) Remove binary and runtime files\n"
     printf "  Enter) Exit\n\n"
     printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
     read choice
 
     case "$choice" in
         1) install_binary ;;
-        2) start_proxy ;;
-        3) stop_proxy ;;
-        4) restart_proxy ;;
-        5) toggle_verbose ;;
-        6) show_telegram_only ;;
-        7) show_quick_only ;;
-        8) remove_all ;;
+        2) update_binary ;;
+        3) start_proxy ;;
+        4) stop_proxy ;;
+        5) restart_proxy ;;
+        6) toggle_verbose ;;
+        7) show_telegram_only ;;
+        8) show_quick_only ;;
+        9) remove_all ;;
         *) exit 0 ;;
     esac
 }
@@ -508,6 +663,7 @@ menu() {
 if [ "$COMMAND_MODE" = "1" ]; then
     case "$1" in
         install) install_binary ;;
+        update) update_binary ;;
         start) start_proxy ;;
         stop) stop_proxy ;;
         restart) restart_proxy ;;

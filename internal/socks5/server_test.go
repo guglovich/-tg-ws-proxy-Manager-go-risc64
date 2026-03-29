@@ -217,16 +217,18 @@ func TestHandleConnUnknownIPWithMTProtoInitRoutesAsTelegram(t *testing.T) {
 	}
 }
 
-func TestHandleConnRejectsHTTPTransport(t *testing.T) {
-	var called bool
+func TestHandleConnFallsBackForTelegramHTTPTransport(t *testing.T) {
+	var got struct {
+		host string
+		port int
+		init []byte
+	}
 
 	srv := NewServer(config.Default(), log.New(io.Discard, "", 0))
-	srv.proxyTCPFunc = func(ctx context.Context, conn net.Conn, host string, port int) error {
-		called = true
-		return nil
-	}
 	srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
-		called = true
+		got.host = host
+		got.port = port
+		got.init = append([]byte(nil), init...)
 		return nil
 	}
 
@@ -237,8 +239,11 @@ func TestHandleConnRejectsHTTPTransport(t *testing.T) {
 		}
 	})
 
-	if called {
-		t.Fatal("did not expect proxying paths to be called for http transport")
+	if got.host != "149.154.167.41" || got.port != 443 {
+		t.Fatalf("unexpected tcp fallback target for telegram http transport: %s:%d", got.host, got.port)
+	}
+	if !bytes.Equal(got.init, init) {
+		t.Fatal("expected http transport bytes to be forwarded to tcp fallback")
 	}
 }
 

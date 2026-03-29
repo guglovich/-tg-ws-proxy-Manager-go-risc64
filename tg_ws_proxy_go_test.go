@@ -938,6 +938,45 @@ func TestManagerStatusIgnoresFalsePositivePgrepMatches(t *testing.T) {
 	}
 }
 
+func TestManagerStatusDetectsPersistentServiceViaPidofFallback(t *testing.T) {
+	env := managerEnv(t)
+
+	persistDir := strings.Split(envValue(env, "PERSISTENT_DIR_CANDIDATES"), " ")[0]
+	persistPathFile := envValue(env, "PERSIST_PATH_FILE")
+	persistVersionFile := envValue(env, "PERSIST_VERSION_FILE")
+	if persistDir == "" || persistPathFile == "" || persistVersionFile == "" {
+		t.Fatal("missing persistent env paths")
+	}
+
+	persistBin := filepath.Join(persistDir, "tg-ws-proxy")
+	buildFakeProxyBinary(t, persistBin)
+	writeFile(t, filepath.Join(persistDir, "tg-ws-proxy-go.sh"), "#!/bin/sh\nexit 0\n", 0o755)
+	writeFile(t, persistPathFile, persistDir+"\n", 0o644)
+	writeFile(t, persistVersionFile, "v9.9.9\n", 0o644)
+
+	cmd := exec.Command(persistBin)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start persistent fake proxy: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	fakeBinDir := t.TempDir()
+	writeFile(t, filepath.Join(fakeBinDir, "pgrep"), "#!/bin/sh\nexit 1\n", 0o755)
+	writeFile(t, filepath.Join(fakeBinDir, "pidof"), fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = \"tg-ws-proxy\" ]; then\n  printf '%d\\n'\nfi\n", cmd.Process.Pid), 0o755)
+	env = setEnvValue(env, "PATH", fakeBinDir+":"+envValue(env, "PATH"))
+
+	out, err := runManager(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "process   : running") {
+		t.Fatalf("expected pidof fallback to detect running persistent service, got:\n%s", out)
+	}
+}
+
 func TestManagerMainMenuShowsSimplifiedActions(t *testing.T) {
 	env := managerEnv(t)
 

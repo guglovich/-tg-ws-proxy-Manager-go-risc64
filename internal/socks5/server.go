@@ -31,9 +31,9 @@ var errUDPFragmentUnsupported = errors.New("udp fragmentation is not supported")
 const (
 	socksCmdConnect      = 0x01
 	socksCmdUDPAssociate = 0x03
-	wsFailCooldown = 30 * time.Second
-	wsFailFastDial = 2 * time.Second
-	statsLogEvery  = 30 * time.Second
+	wsFailCooldown       = 30 * time.Second
+	wsFailFastDial       = 2 * time.Second
+	statsLogEvery        = 30 * time.Second
 )
 
 var wsEnabledDCs = map[int]struct{}{
@@ -90,9 +90,9 @@ type runtimeStats struct {
 
 func NewServer(cfg config.Config, logger *log.Logger) *Server {
 	srv := &Server{
-		cfg:    cfg,
-		logger: logger,
-		pool:   wsbridge.NewPool(cfg),
+		cfg:         cfg,
+		logger:      logger,
+		pool:        wsbridge.NewPool(cfg),
 		wsBlacklist: make(map[routeKey]struct{}),
 		wsFailUntil: make(map[routeKey]time.Time),
 		stats:       &runtimeStats{},
@@ -237,8 +237,11 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			}
 			return
 		}
-		s.stats.incHTTPRejected()
-		s.logger.Printf("[%s] http transport rejected for %s:%d", clientAddr, req.DstHost, req.DstPort)
+		s.stats.incTCPFallback()
+		s.debugf("[%s] route=tcp-fallback reason=http-transport destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
+		if err := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
+			s.logger.Printf("[%s] tcp fallback failed: %v", clientAddr, err)
+		}
 		return
 	}
 
@@ -984,15 +987,15 @@ func fallbackReason(err error) string {
 	return "ws-connect-failed"
 }
 
-func (s *runtimeStats) incConnections()        { s.add(func() { s.connections++ }) }
-func (s *runtimeStats) incWSConnections()      { s.add(func() { s.wsConnections++ }) }
-func (s *runtimeStats) incTCPFallback()        { s.add(func() { s.tcpFallbacks++ }) }
-func (s *runtimeStats) incHTTPRejected()       { s.add(func() { s.httpRejected++ }) }
-func (s *runtimeStats) incPassthrough()        { s.add(func() { s.passthrough++ }) }
-func (s *runtimeStats) incWSErrors()           { s.add(func() { s.wsErrors++ }) }
-func (s *runtimeStats) incPoolHit()            { s.add(func() { s.poolHits++ }) }
-func (s *runtimeStats) incPoolMiss()           { s.add(func() { s.poolMisses++ }) }
-func (s *runtimeStats) incBlacklistHits()      { s.add(func() { s.blacklistHits++ }) }
+func (s *runtimeStats) incConnections()         { s.add(func() { s.connections++ }) }
+func (s *runtimeStats) incWSConnections()       { s.add(func() { s.wsConnections++ }) }
+func (s *runtimeStats) incTCPFallback()         { s.add(func() { s.tcpFallbacks++ }) }
+func (s *runtimeStats) incHTTPRejected()        { s.add(func() { s.httpRejected++ }) }
+func (s *runtimeStats) incPassthrough()         { s.add(func() { s.passthrough++ }) }
+func (s *runtimeStats) incWSErrors()            { s.add(func() { s.wsErrors++ }) }
+func (s *runtimeStats) incPoolHit()             { s.add(func() { s.poolHits++ }) }
+func (s *runtimeStats) incPoolMiss()            { s.add(func() { s.poolMisses++ }) }
+func (s *runtimeStats) incBlacklistHits()       { s.add(func() { s.blacklistHits++ }) }
 func (s *runtimeStats) incCooldownActivations() { s.add(func() { s.cooldownActivs++ }) }
 
 func (s *runtimeStats) add(fn func()) {

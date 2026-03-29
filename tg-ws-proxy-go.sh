@@ -384,15 +384,41 @@ pid_matches_binary() {
     kill -0 "$pid" 2>/dev/null
 }
 
-is_running() {
-    if ! command -v pgrep >/dev/null 2>&1; then
-        pid="$(read_first_line "$PID_FILE" 2>/dev/null || true)"
-        [ -n "$pid" ] || return 1
-        runtime_path="$(runtime_bin_path 2>/dev/null || true)"
-        [ -n "$runtime_path" ] || return 1
-        pid_matches_binary "$pid" "$runtime_path"
-        return $?
+matching_pids_for_path() {
+    path="$1"
+    [ -n "$path" ] || return 1
+
+    matches=""
+
+    pid_from_file="$(read_first_line "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$pid_from_file" ] && pid_matches_binary "$pid_from_file" "$path"; then
+        matches="$matches
+$pid_from_file"
     fi
+
+    if command -v pgrep >/dev/null 2>&1; then
+        pids="$(pgrep -f "$path" 2>/dev/null || true)"
+        for pid in $pids; do
+            pid_matches_binary "$pid" "$path" || continue
+            matches="$matches
+$pid"
+        done
+    fi
+
+    if command -v pidof >/dev/null 2>&1; then
+        pids="$(pidof "$(basename "$path")" 2>/dev/null || true)"
+        for pid in $pids; do
+            pid_matches_binary "$pid" "$path" || continue
+            matches="$matches
+$pid"
+        done
+    fi
+
+    [ -n "$matches" ] || return 1
+    printf "%s\n" "$matches" | awk 'NF && !seen[$0]++'
+}
+
+is_running() {
     current_pids >/dev/null 2>&1
 }
 
@@ -400,24 +426,10 @@ current_pids() {
     all_pids=""
     for path in "$BIN_PATH" "$(persistent_bin_path 2>/dev/null || true)"; do
         [ -n "$path" ] || continue
-        pid_from_file="$(read_first_line "$PID_FILE" 2>/dev/null || true)"
-        if [ -n "$pid_from_file" ] && pid_matches_binary "$pid_from_file" "$path"; then
-            all_pids="$all_pids
-$pid_from_file"
-            continue
-        fi
-
-        if ! command -v pgrep >/dev/null 2>&1; then
-            continue
-        fi
-
-        pids="$(pgrep -f "$path" 2>/dev/null || true)"
+        pids="$(matching_pids_for_path "$path" 2>/dev/null || true)"
         [ -n "$pids" ] || continue
-        for pid in $pids; do
-            pid_matches_binary "$pid" "$path" || continue
-            all_pids="$all_pids
-$pid"
-        done
+        all_pids="$all_pids
+$pids"
     done
 
     [ -n "$all_pids" ] || return 1

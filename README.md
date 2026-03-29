@@ -146,6 +146,11 @@ go test ./...
 
 Сейчас это Go-only версия вокруг минимального proxy core на базе [tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) от [Flowseal](https://github.com/Flowseal)
 
+## Благодарности
+
+- `tg-ws-proxy` by [Flowseal](https://github.com/Flowseal)
+- [StressOzz](https://github.com/StressOzz)
+
 ## Лицензия
 
 [MIT License](LICENSE)

@@ -23,6 +23,7 @@ else
 fi
 
 APP_NAME="tg-ws-proxy"
+LAUNCHER_NAME="${LAUNCHER_NAME:-tgm}"
 REPO_OWNER="${REPO_OWNER:-d0mhate}"
 REPO_NAME="${REPO_NAME:--tg-ws-proxy-Manager-go}"
 BINARY_NAME="${BINARY_NAME:-tg-ws-proxy-openwrt}"
@@ -30,9 +31,11 @@ RELEASE_URL="${RELEASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/l
 SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
 INSTALL_DIR="${INSTALL_DIR:-/tmp/tg-ws-proxy-go}"
 BIN_PATH="${BIN_PATH:-$INSTALL_DIR/tg-ws-proxy}"
+LAUNCHER_PATH="${LAUNCHER_PATH:-/usr/bin/$LAUNCHER_NAME}"
 LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
 LISTEN_PORT="${LISTEN_PORT:-1080}"
 VERBOSE="${VERBOSE:-0}"
+REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
 COMMAND_MODE="0"
 
 if [ "$#" -gt 0 ]; then
@@ -41,6 +44,18 @@ fi
 
 lan_ip() {
     uci get network.lan.ipaddr 2>/dev/null | cut -d/ -f1
+}
+
+is_openwrt() {
+    [ -f /etc/openwrt_release ] && grep -q "OpenWrt" /etc/openwrt_release 2>/dev/null
+}
+
+openwrt_arch() {
+    awk -F"'" '/DISTRIB_ARCH/ {print $2}' /etc/openwrt_release 2>/dev/null
+}
+
+tmp_available_kb() {
+    df -k /tmp 2>/dev/null | awk 'NR==2 {print $4+0}'
 }
 
 telegram_host() {
@@ -84,6 +99,20 @@ current_pids() {
     pgrep -f "$BIN_PATH"
 }
 
+current_launcher_path() {
+    if [ -f "$LAUNCHER_PATH" ]; then
+        printf "%s" "$LAUNCHER_PATH"
+        return 0
+    fi
+
+    if [ -f "/tmp/$LAUNCHER_NAME" ]; then
+        printf "%s" "/tmp/$LAUNCHER_NAME"
+        return 0
+    fi
+
+    return 1
+}
+
 show_header() {
     if [ "$COMMAND_MODE" = "0" ] && [ -t 1 ]; then
         clear
@@ -110,6 +139,67 @@ show_quick_commands() {
     printf "  sh %s status\n" "$0"
     printf "  sh %s quick\n" "$0"
     printf "  sh %s telegram\n" "$0"
+    if launcher="$(current_launcher_path 2>/dev/null)"; then
+        printf "  %s\n" "$launcher"
+    fi
+}
+
+port_in_use() {
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$LISTEN_PORT" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+    fi
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltn 2>/dev/null | awk -v p="$LISTEN_PORT" 'NR>1 {n=$4; sub(/^.*:/, "", n); if (n == p) found=1} END {exit(found ? 0 : 1)}' && return 0
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -ltn 2>/dev/null | awk -v p="$LISTEN_PORT" 'NR>2 {n=$4; sub(/^.*:/, "", n); if (n == p) found=1} END {exit(found ? 0 : 1)}' && return 0
+    fi
+
+    return 1
+}
+
+release_url_reachable() {
+    if command -v wget >/dev/null 2>&1; then
+        wget --spider "$RELEASE_URL" >/dev/null 2>&1
+        return $?
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -I -L --fail "$RELEASE_URL" >/dev/null 2>&1
+        return $?
+    fi
+
+    return 1
+}
+
+show_environment_checks() {
+    if is_openwrt; then
+        printf "%sOpenWrt detected%s\n" "$C_GREEN" "$C_RESET"
+    else
+        printf "%sWarning:%s system does not look like OpenWrt\n" "$C_YELLOW" "$C_RESET"
+    fi
+
+    arch="$(openwrt_arch)"
+    if [ -n "$arch" ]; then
+        if [ "$arch" = "mipsel_24kc" ]; then
+            printf "%sArch detected:%s %s\n" "$C_GREEN" "$C_RESET" "$arch"
+        else
+            printf "%sWarning:%s detected arch is %s and expected arch is mipsel_24kc\n" "$C_YELLOW" "$C_RESET" "$arch"
+        fi
+    fi
+
+    free_kb="$(tmp_available_kb)"
+    if [ -n "$free_kb" ]; then
+        printf "tmp free: %s KB\n" "$free_kb"
+    fi
+}
+
+check_tmp_space() {
+    free_kb="$(tmp_available_kb)"
+    [ -n "$free_kb" ] || return 0
+    [ "$free_kb" -ge "$REQUIRED_TMP_KB" ]
 }
 
 show_status() {
@@ -140,9 +230,45 @@ show_status() {
     printf "  source    : %s\n" "$SOURCE_BIN"
     printf "  release   : %s\n" "$RELEASE_URL"
     printf "  installed : %s\n" "$BIN_PATH"
+    if launcher="$(current_launcher_path 2>/dev/null)"; then
+        printf "  launcher  : %s\n" "$launcher"
+    else
+        printf "  launcher  : %s\n" "-"
+    fi
     printf "  listen    : %s:%s\n" "$LISTEN_HOST" "$LISTEN_PORT"
     printf "  mode      : terminal logs only\n"
     printf "  verbose   : %s\n" "$verbose_state"
+    if is_openwrt; then
+        printf "  system    : OpenWrt\n"
+    else
+        printf "  system    : not detected as OpenWrt\n"
+    fi
+    arch="$(openwrt_arch)"
+    printf "  arch      : %s\n" "${arch:--}"
+    free_kb="$(tmp_available_kb)"
+    printf "  tmp free  : %s KB\n" "${free_kb:--}"
+}
+
+install_launcher() {
+    target="$LAUNCHER_PATH"
+
+    if ! mkdir -p "$(dirname "$target")" 2>/dev/null; then
+        target="/tmp/$LAUNCHER_NAME"
+    fi
+
+    if ! {
+        printf '#!/bin/sh\n'
+        printf 'sh %s "$@"\n' "$0"
+    } > "$target" 2>/dev/null; then
+        target="/tmp/$LAUNCHER_NAME"
+        {
+            printf '#!/bin/sh\n'
+            printf 'sh %s "$@"\n' "$0"
+        } > "$target" || return 1
+    fi
+
+    chmod +x "$target" || return 1
+    printf "%s" "$target"
 }
 
 download_binary() {
@@ -162,11 +288,29 @@ download_binary() {
 }
 
 install_binary() {
+    show_header
+    show_environment_checks
+    printf "\n"
+
+    if ! check_tmp_space; then
+        free_kb="$(tmp_available_kb)"
+        printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
+        printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
+        printf "Available: %s KB\n" "${free_kb:-unknown}"
+        pause
+        return 1
+    fi
+
     if [ ! -f "$SOURCE_BIN" ]; then
-        show_header
         printf "%sLocal binary not found%s\n\n" "$C_YELLOW" "$C_RESET"
         printf "Trying to download from GitHub Release\n"
         printf "%s\n\n" "$RELEASE_URL"
+        if ! release_url_reachable; then
+            printf "%sRelease URL is not reachable%s\n\n" "$C_RED" "$C_RESET"
+            printf "Check GitHub Release visibility or network access\n"
+            pause
+            return 1
+        fi
         if ! download_binary; then
             printf "%sDownload failed%s\n\n" "$C_RED" "$C_RESET"
             printf "You can also place the binary here manually\n"
@@ -179,11 +323,15 @@ install_binary() {
     mkdir -p "$INSTALL_DIR" || return 1
     cp "$SOURCE_BIN" "$BIN_PATH" || return 1
     chmod +x "$BIN_PATH" || return 1
+    launcher_path="$(install_launcher)" || launcher_path=""
 
     show_header
     printf "%sBinary installed%s\n\n" "$C_GREEN" "$C_RESET"
     printf "Source:\n  %s\n\n" "$SOURCE_BIN"
     printf "Installed to:\n  %s\n" "$BIN_PATH"
+    if [ -n "$launcher_path" ]; then
+        printf "\nLauncher:\n  %s\n" "$launcher_path"
+    fi
     pause
 }
 
@@ -211,7 +359,17 @@ start_proxy() {
         return 0
     fi
 
+    if port_in_use; then
+        show_header
+        printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
+        printf "Free the port first or change LISTEN_PORT\n"
+        pause
+        return 1
+    fi
+
     show_header
+    show_environment_checks
+    printf "\n"
     printf "%sStarting %s in terminal%s\n\n" "$C_GREEN" "$APP_NAME" "$C_RESET"
     printf "Logs will be printed here.\n"
     printf "Stop with Ctrl+C\n"
@@ -275,9 +433,10 @@ remove_all() {
     stop_running >/dev/null 2>&1 || true
     rm -rf "$INSTALL_DIR"
     rm -f "$SOURCE_BIN"
+    rm -f "$LAUNCHER_PATH" "/tmp/$LAUNCHER_NAME"
 
     show_header
-    printf "%sBinary and downloaded files removed%s\n" "$C_GREEN" "$C_RESET"
+    printf "%sBinary launcher and downloaded files removed%s\n" "$C_GREEN" "$C_RESET"
     pause
 }
 

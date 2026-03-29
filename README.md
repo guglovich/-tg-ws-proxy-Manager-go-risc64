@@ -95,6 +95,14 @@ wget -O /tmp/tg-ws-proxy-go.sh https://raw.githubusercontent.com/d0mhate/-tg-ws-
 
 Если файла нет то script сам пробует скачать готовый OpenWrt binary из `latest release`
 
+Сам большой binary остаётся в `/tmp` потому что там обычно есть место
+
+Для удобного вызова script ещё создаёт маленький launcher `tgm`
+
+Обычно это `/usr/bin/tgm`
+
+Если туда писать нельзя то будет fallback в `/tmp/tgm`
+
 ## Быстрый старт локально
 
 Если хотите сначала проверить всё на своей машине то соберите бинарник
@@ -138,6 +146,12 @@ go build ./cmd/tg-ws-proxy
 - берёт локальный binary из `/tmp/tg-ws-proxy-openwrt`
 - если локального файла нет, скачивает binary из GitHub Release
 - копирует его в `/tmp/tg-ws-proxy-go/tg-ws-proxy`
+- создаёт короткий launcher `tgm`
+- предупреждает если это не OpenWrt
+- предупреждает если `DISTRIB_ARCH` не `mipsel_24kc`
+- проверяет что в `/tmp` хватает места
+- проверяет что порт `1080` не занят
+- проверяет что `latest release` вообще доступен
 - умеет `install`
 - умеет `start`
 - умеет `stop`
@@ -176,6 +190,12 @@ sh tg-ws-proxy-go.sh telegram
 
 ```bash
 sh tg-ws-proxy-go.sh remove
+```
+
+Если launcher создался то дальше можно запускать script короче
+
+```bash
+tgm
 ```
 
 ## Флаги CLI

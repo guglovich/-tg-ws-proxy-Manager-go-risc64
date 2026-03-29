@@ -27,11 +27,12 @@ jobs:
         run: go test -coverprofile=coverage.out ./...
 
       - name: upload coverage to codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v5.4.2
         with:
           files: ./coverage.out
           use_oidc: true
-          fail_ci_if_error: true
+          fail_ci_if_error: false
+          plugins: noop
           verbose: true
 
       - name: build local binary

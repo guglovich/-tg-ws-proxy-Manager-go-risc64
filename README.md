@@ -1,214 +1,202 @@
-> [!CAUTION]
->
-> ### Реакция антивирусов
->
-> Windows Defender часто ошибочно помечает приложение как **Wacatac**.  
-> Если вы не можете скачать из-за блокировки, то:
->
-> 1) Попробуйте скачать версию win7 (она ничем не отличается в плане функционала)
-> 2) Отключите антивирус на время скачивания, добавьте файл в исключения и включите обратно  
->
-> **Всегда проверяйте, что скачиваете из интернета, тем более из непроверенных источников. Всегда лучше смотреть на детекты широко известных антивирусов на VirusTotal**
+# TG WS Proxy Go
 
-# TG WS Proxy
+Это Go версия `tg-ws-proxy` без Python GUI и без desktop обвязки
 
-**Локальный SOCKS5-прокси** для Telegram Desktop, который **ускоряет работу Telegram**, перенаправляя трафик через WebSocket-соединения. Данные передаются в том же зашифрованном виде, а для работы не нужны сторонние сервера.
+Проект нужен для запуска минимального Telegram `SOCKS5` proxy core на слабом устройстве вроде OpenWrt роутера
 
-<img width="529" height="487" alt="image" src="https://github.com/user-attachments/assets/6a4cf683-0df8-43af-86c1-0e8f08682b62" />
+Главная идея простая
+
+- убрать тяжёлый Python runtime
+- оставить только нужное proxy ядро
+- запускать всё одним Go бинарником
+
+## Что умеет
+
+- поднимает локальный `SOCKS5` прокси
+- распознаёт Telegram трафик
+- достаёт `DC` из `MTProto init`
+- пытается перевести Telegram трафик в `TLS + WebSocket`
+- если не вышло идёт в прямой `TCP fallback`
+- умеет `WS pool`
+- умеет `cooldown` и `blacklist`
+- пишет runtime stats
+
+## Текущее состояние
+
+Сейчас проект уже рабочий
+
+- есть сборка под `OpenWrt`
+- есть `GitHub Actions` для тестов и сборки
+
+Целевой роутер под который всё и делалось
+
+- `Xiaomi Mi Router 4A Gigabit Edition v2`
+- `OpenWrt 24.10.5`
+- `ramips/mt7621`
+- `mipsel_24kc`
+
+Целевая сборка такая
+
+```bash
+GOOS=linux GOARCH=mipsle GOMIPS=softfloat
+```
 
 ## Как это работает
 
-```
-Telegram Desktop → SOCKS5 (127.0.0.1:1080) → TG WS Proxy → WSS → Telegram DC
-```
-
-1. Приложение поднимает локальный SOCKS5-прокси на `127.0.0.1:1080`
-2. Перехватывает подключения к IP-адресам Telegram
-3. Извлекает DC ID из MTProto obfuscation init-пакета
-4. Устанавливает WebSocket (TLS) соединение к соответствующему DC через домены Telegram
-5. Если WS недоступен (302 redirect) — автоматически переключается на прямое TCP-соединение
-
-## 🚀 Быстрый старт
-
-### Windows
-
-Перейдите на [страницу релизов](https://github.com/Flowseal/tg-ws-proxy/releases) и скачайте **`TgWsProxy_windows.exe`**. Он собирается автоматически через [Github Actions](https://github.com/Flowseal/tg-ws-proxy/actions) из открытого исходного кода.
-
-При первом запуске откроется окно с инструкцией по подключению Telegram Desktop. Приложение сворачивается в системный трей.
-
-**Меню трея:**
-
-- **Открыть в Telegram** — автоматически настроить прокси через `tg://socks` ссылку
-- **Перезапустить прокси** — перезапуск без выхода из приложения
-- **Настройки...** — GUI-редактор конфигурации (в т.ч. версия приложения, опциональная проверка обновлений с GitHub)
-- **Открыть логи** — открыть файл логов
-- **Выход** — остановить прокси и закрыть приложение
-
-При первом запуске после старта может появиться запрос об открытии страницы релиза, если на GitHub вышла новая версия (отключается в настройках).
-
-### macOS
-
-Перейдите на [страницу релизов](https://github.com/Flowseal/tg-ws-proxy/releases) и скачайте **`TgWsProxy_macos_universal.dmg`** — универсальная сборка для Apple Silicon и Intel.
-
-1. Открыть образ
-2. Перенести **TG WS Proxy.app** в папку **Applications**
-3. При первом запуске macOS может попросить подтвердить открытие: **Системные настройки → Конфиденциальность и безопасность → Всё равно открыть**
-
-### Linux
-
-Для Debian/Ubuntu скачайте со [страницы релизов](https://github.com/Flowseal/tg-ws-proxy/releases) пакет **`TgWsProxy_linux_amd64.deb`**.
-
-Для Arch и Arch-Based дистрибутивов подготовлены пакеты в AUR: [tg-ws-proxy-bin](https://aur.archlinux.org/packages/tg-ws-proxy-bin), [tg-ws-proxy-git](https://aur.archlinux.org/packages/tg-ws-proxy-git), [tg-ws-proxy-cli](https://aur.archlinux.org/packages/tg-ws-proxy-cli)
-
-```shell
-# Установка без AUR-helper
-git clone https://aur.archlinux.org/tg-ws-proxy-bin.git
-cd tg-ws-proxy-bin
-makepkg -si
-
-# При помощи AUR-helper
-paru -S tg-ws-proxy-bin
-
-# Если вы установили -cli пакет, то запуск осуществляется через systemctl, где 8888 это номер порта прокси:
-sudo systemctl start tg-ws-proxy-cli@8888
+```text
+Telegram client -> SOCKS5 -> tg-ws-proxy -> WSS or TCP -> Telegram DC
 ```
 
-Для остальных дистрибутивов можно использовать **`TgWsProxy_linux_amd64`** (бинарный файл для x86_64).
+Если запускать бинарник руками локально то он по умолчанию слушает `127.0.0.1:1080`
+
+Для роутера нормальный дефолт это `0.0.0.0:1080`
+
+В `tg-ws-proxy-go.sh` для роутера это уже стоит по умолчанию
+
+## Быстрый старт локально
+
+Собрать
 
 ```bash
-chmod +x TgWsProxy_linux_amd64
-./TgWsProxy_linux_amd64
+go build ./cmd/tg-ws-proxy
 ```
 
-При первом запуске откроется окно с инструкцией. Приложение работает в системном трее (требуется AppIndicator).
-
-## Установка из исходников
-
-### Консольный proxy
-
-Для запуска только SOCKS5/WebSocket proxy без tray-интерфейса достаточно базовой установки:
+Запустить
 
 ```bash
-pip install -e .
-tg-ws-proxy
+./tg-ws-proxy --host 127.0.0.1 --port 1080 --verbose
 ```
 
-### Windows 7/10+
+Что поставить в Telegram
+
+- тип `SOCKS5`
+- host `127.0.0.1`
+- port `1080`
+- username пусто
+- password пусто
+
+## Быстрый старт на роутере
+
+Собрать OpenWrt бинарник
 
 ```bash
-pip install -e .
-tg-ws-proxy-tray-win
+mkdir -p build
+GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt ./cmd/tg-ws-proxy
 ```
 
-### macOS
+Закинуть на роутер
 
 ```bash
-pip install -e .
-tg-ws-proxy-tray-macos
+scp build/tg-ws-proxy-openwrt tg-ws-proxy-go.sh root@ROUTER_IP:/tmp/
 ```
 
-### Linux
+Запустить manager script
 
 ```bash
-pip install -e .
-tg-ws-proxy-tray-linux
+ssh root@ROUTER_IP 'sh /tmp/tg-ws-proxy-go.sh'
 ```
 
-### Консольный режим из исходников
+Или без меню
 
 ```bash
-tg-ws-proxy [--port PORT] [--host HOST] [--dc-ip DC:IP ...] [-v]
+ssh root@ROUTER_IP 'sh /tmp/tg-ws-proxy-go.sh install'
+ssh root@ROUTER_IP 'sh /tmp/tg-ws-proxy-go.sh start'
 ```
 
-**Аргументы:**
+Во время `start` прокси работает в foreground
 
-| Аргумент | По умолчанию | Описание |
+Логи идут прямо в терминал
+
+Остановка через `Ctrl+C`
+
+## Что делает tg-ws-proxy-go.sh
+
+`tg-ws-proxy-go.sh` это простой manager script для роутера
+
+По умолчанию он поднимает прокси на `0.0.0.0:1080`
+
+Он
+
+- берёт готовый бинарник из `/tmp/tg-ws-proxy-openwrt`
+- копирует его в `/tmp/tg-ws-proxy-go/tg-ws-proxy`
+- умеет `install`
+- умеет `start`
+- умеет `stop`
+- умеет `restart`
+- умеет показывать настройки для Telegram
+
+Команды такие
+
+```bash
+sh tg-ws-proxy-go.sh install
+sh tg-ws-proxy-go.sh start
+sh tg-ws-proxy-go.sh stop
+sh tg-ws-proxy-go.sh restart
+sh tg-ws-proxy-go.sh status
+sh tg-ws-proxy-go.sh quick
+sh tg-ws-proxy-go.sh telegram
+sh tg-ws-proxy-go.sh remove
+```
+
+## Флаги CLI
+
+Основные флаги
+
+| flag | default | meaning |
 |---|---|---|
-| `--port` | `1080` | Порт SOCKS5-прокси |
-| `--host` | `127.0.0.1` | Хост SOCKS5-прокси |
-| `--dc-ip` | `2:149.154.167.220`, `4:149.154.167.220` | Целевой IP для DC (можно указать несколько раз) |
-| `-v`, `--verbose` | выкл. | Подробное логирование (DEBUG) |
+| `--host` | `127.0.0.1` | где слушать `SOCKS5` |
+| `--port` | `1080` | порт `SOCKS5` |
+| `--verbose` | `false` | подробные логи |
+| `--buf-kb` | `256` | socket buffer в KB |
+| `--pool-size` | `1` | idle `WS` connections на bucket |
+| `--dial-timeout` | `10s` | timeout TCP dial |
+| `--init-timeout` | `15s` | timeout чтения `MTProto init` |
+| `--dc-ip` | built-in defaults | override target IP for DC |
 
-**Примеры:**
+Пример
 
 ```bash
-# Стандартный запуск
-tg-ws-proxy
-
-# Другой порт и дополнительные DC
-tg-ws-proxy --port 9050 --dc-ip 1:149.154.175.205 --dc-ip 2:149.154.167.220
-
-# С подробным логированием
-tg-ws-proxy -v
+./tg-ws-proxy --host 0.0.0.0 --port 1080 --verbose
 ```
 
-## CLI-скрипты (pyproject.toml)
+## Встроенные default DC IP
 
-CLI команды объявляются в `pyproject.toml` в секции `[project.scripts]` и должны указывать на `module:function`.
+По умолчанию используются
 
-Пример:
-
-```toml
-[project.scripts]
-tg-ws-proxy = "proxy.tg_ws_proxy:main"
-tg-ws-proxy-tray-win = "windows:main"
-tg-ws-proxy-tray-macos = "macos:main"
-tg-ws-proxy-tray-linux = "linux:main"
+```text
+1 -> 149.154.175.205
+2 -> 149.154.167.220
+4 -> 149.154.167.220
+5 -> 91.108.56.100
 ```
 
-## Настройка Telegram Desktop
+Если нужно их можно переопределить через `--dc-ip`
 
-### Автоматически
+Пример
 
-ПКМ по иконке в трее → **«Открыть в Telegram»**
-
-### Вручную
-
-1. Telegram → **Настройки** → **Продвинутые настройки** → **Тип подключения** → **Прокси**
-2. Добавить прокси:
-   - **Тип:** SOCKS5
-   - **Сервер:** `127.0.0.1`
-   - **Порт:** `1080`
-   - **Логин/Пароль:** оставить пустыми
-
-## Конфигурация
-
-Tray-приложение хранит данные в:
-
-- **Windows:** `%APPDATA%/TgWsProxy`
-- **macOS:** `~/Library/Application Support/TgWsProxy`
-- **Linux:** `~/.config/TgWsProxy` (или `$XDG_CONFIG_HOME/TgWsProxy`)
-
-```json
-{
-  "host": "127.0.0.1",
-  "port": 1080,
-  "dc_ip": [
-    "2:149.154.167.220",
-    "4:149.154.167.220"
-  ],
-  "verbose": false,
-  "buf_kb": 256,
-  "pool_size": 4,
-  "log_max_mb": 5.0,
-  "check_updates": true
-}
+```bash
+./tg-ws-proxy --dc-ip 2:149.154.167.220 --dc-ip 4:149.154.167.220
 ```
 
-Ключ **`check_updates`** — при `true` при запросе к GitHub сравнивается версия с последним релизом (только уведомление и ссылка на страницу загрузки). На Windows в конфиге может быть **`autostart`** (автозапуск при входе в систему).
+## Тесты
 
-## Автоматическая сборка
+Запуск
 
-Проект содержит спецификации PyInstaller ([`packaging/windows.spec`](packaging/windows.spec), [`packaging/macos.spec`](packaging/macos.spec), [`packaging/linux.spec`](packaging/linux.spec)) и GitHub Actions workflow ([`.github/workflows/build.yml`](.github/workflows/build.yml)) для автоматической сборки.
+```bash
+go test ./...
+```
 
-Минимально поддерживаемые версии ОС для текущих бинарных сборок:
+В репозитории уже есть CI
 
-- Windows 10+ для `TgWsProxy_windows.exe`
-- Windows 7 (x64) для `TgWsProxy_windows_7_64bit.exe`
-- Windows 7 (x32) для `TgWsProxy_windows_7_32bit.exe`
-- Intel macOS 10.15+
-- Apple Silicon macOS 11.0+
-- Linux x86_64 (требуется AppIndicator для системного трея)
+- `go test ./...`
+- `go build ./cmd/tg-ws-proxy`
+- кросс сборка `linux/mipsle`
+
+## Что было раньше
+
+Раньше это был Python desktop проект
+
+Сейчас репозиторий это Go only версия вокруг минимального proxy core для роутера
 
 ## Лицензия
 

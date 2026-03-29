@@ -21,6 +21,16 @@ func TestLookupEndpoint(t *testing.T) {
 	}
 }
 
+func TestLookupEndpointIPv6(t *testing.T) {
+	ep, ok := LookupEndpoint("2001:67c:4e8:f002::7")
+	if !ok {
+		t.Fatal("expected ipv6 endpoint lookup to succeed")
+	}
+	if ep.DC != 2 || ep.IsMedia {
+		t.Fatalf("unexpected ipv6 endpoint: %+v", ep)
+	}
+}
+
 func TestWSDomains(t *testing.T) {
 	got := WSDomains(203, false)
 	if len(got) != 2 {

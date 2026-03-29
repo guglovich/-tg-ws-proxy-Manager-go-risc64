@@ -3,6 +3,7 @@ package telegram
 import (
 	"encoding/binary"
 	"net"
+	"strings"
 )
 
 type Endpoint struct {
@@ -57,6 +58,17 @@ var DCOverrides = map[int]int{
 	203: 2,
 }
 
+var IPv6Prefixes = []struct {
+	Prefix   string
+	Endpoint Endpoint
+}{
+	{Prefix: "2001:b28:f23d:f001:", Endpoint: Endpoint{DC: 1, IsMedia: false}},
+	{Prefix: "2001:67c:4e8:f002:", Endpoint: Endpoint{DC: 2, IsMedia: false}},
+	{Prefix: "2001:b28:f23d:f003:", Endpoint: Endpoint{DC: 3, IsMedia: false}},
+	{Prefix: "2001:67c:4e8:f004:", Endpoint: Endpoint{DC: 4, IsMedia: false}},
+	{Prefix: "2001:b28:f23f:f005:", Endpoint: Endpoint{DC: 5, IsMedia: false}},
+}
+
 func IsTelegramIP(ip string) bool {
 	n, ok := ipv4ToUint32(ip)
 	if !ok {
@@ -72,7 +84,23 @@ func IsTelegramIP(ip string) bool {
 
 func LookupEndpoint(ip string) (Endpoint, bool) {
 	ep, ok := IPToDC[ip]
-	return ep, ok
+	if ok {
+		return ep, true
+	}
+
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() != nil {
+		return Endpoint{}, false
+	}
+
+	normalized := strings.ToLower(parsed.String())
+	for _, item := range IPv6Prefixes {
+		if strings.HasPrefix(normalized, item.Prefix) {
+			return item.Endpoint, true
+		}
+	}
+
+	return Endpoint{}, false
 }
 
 func WSDomains(dc int, isMedia bool) []string {

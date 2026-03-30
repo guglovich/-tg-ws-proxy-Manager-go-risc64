@@ -38,6 +38,8 @@ const (
 	statsLogEvery        = 30 * time.Second
 )
 
+const errInvalidUsernamePassword = "invalid username/password"
+
 var wsEnabledDCs = map[int]struct{}{
 	2: {},
 	4: {},
@@ -52,6 +54,7 @@ type Server struct {
 	wsBlacklist map[routeKey]struct{}
 	wsFailUntil map[routeKey]time.Time
 	stats       *runtimeStats
+	authFails   *authFailureTracker
 	wsDialFunc  wsbridge.DialFunc
 
 	proxyTCPFunc         func(ctx context.Context, conn net.Conn, host string, port int) error
@@ -90,6 +93,12 @@ type runtimeStats struct {
 	cooldownActivs int
 }
 
+type authFailureTracker struct {
+	mu       sync.Mutex
+	count    int
+	lastAddr string
+}
+
 func NewServer(cfg config.Config, logger *log.Logger) *Server {
 	srv := &Server{
 		cfg:         cfg,
@@ -98,6 +107,7 @@ func NewServer(cfg config.Config, logger *log.Logger) *Server {
 		wsBlacklist: make(map[routeKey]struct{}),
 		wsFailUntil: make(map[routeKey]time.Time),
 		stats:       &runtimeStats{},
+		authFails:   &authFailureTracker{},
 		wsDialFunc:  wsbridge.Dial,
 	}
 	if srv.pool != nil {
@@ -149,7 +159,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 
 	req, err := handshake(conn, s.cfg)
 	if err != nil {
-		s.logger.Printf("[%s] handshake failed: %v", clientAddr, err)
+		s.logHandshakeFailure(clientAddr, err)
 		return
 	}
 	s.stats.incConnections()
@@ -971,13 +981,56 @@ func (s *Server) startStatsLogger(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
+				s.flushAuthFailureSummary()
 				s.logger.Printf("stats: %s blacklist=%d cooldown=%d", s.stats.summary(), s.blacklistSize(), s.cooldownSize())
 				return
 			case <-ticker.C:
+				s.flushAuthFailureSummary()
 				s.logger.Printf("stats: %s blacklist=%d cooldown=%d", s.stats.summary(), s.blacklistSize(), s.cooldownSize())
 			}
 		}
 	}()
+}
+
+func (s *Server) logHandshakeFailure(clientAddr string, err error) {
+	if err == nil {
+		return
+	}
+	if err.Error() == errInvalidUsernamePassword && !s.cfg.Verbose {
+		s.recordAuthFailure(clientAddr)
+		return
+	}
+	s.logger.Printf("[%s] handshake failed: %v", clientAddr, err)
+}
+
+func (s *Server) recordAuthFailure(clientAddr string) {
+	if s.authFails == nil {
+		s.logger.Printf("[%s] handshake failed: %s", clientAddr, errInvalidUsernamePassword)
+		return
+	}
+	s.authFails.mu.Lock()
+	s.authFails.count++
+	s.authFails.lastAddr = clientAddr
+	s.authFails.mu.Unlock()
+}
+
+func (s *Server) flushAuthFailureSummary() {
+	if s.cfg.Verbose || s.authFails == nil {
+		return
+	}
+
+	s.authFails.mu.Lock()
+	count := s.authFails.count
+	lastAddr := s.authFails.lastAddr
+	s.authFails.count = 0
+	s.authFails.lastAddr = ""
+	s.authFails.mu.Unlock()
+
+	if count == 0 {
+		return
+	}
+
+	s.logger.Printf("auth failures summary: %s x%d in %s last_source=%s", errInvalidUsernamePassword, count, statsLogEvery, lastAddr)
 }
 
 func (s *Server) isBlacklisted(key routeKey) bool {

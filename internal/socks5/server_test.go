@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -229,6 +230,77 @@ func TestHandleConnPassthroughRoute(t *testing.T) {
 
 	if called.host != "8.8.8.8" || called.port != 443 {
 		t.Fatalf("unexpected passthrough target: %s:%d", called.host, called.port)
+	}
+}
+
+func TestHandleConnPassthroughRouteWithAuth(t *testing.T) {
+	var called struct {
+		host string
+		port int
+	}
+
+	cfg := config.Default()
+	cfg.Username = "alice"
+	cfg.Password = "secret"
+	srv := NewServer(cfg, log.New(io.Discard, "", 0))
+	srv.proxyTCPFunc = func(ctx context.Context, conn net.Conn, host string, port int) error {
+		called.host = host
+		called.port = port
+		return nil
+	}
+
+	runHandleConnFlowWithAuth(t, srv, ipv4ConnectRequest("8.8.8.8", 443), nil, "alice", "secret", func(reply []byte) {
+		if reply[1] != 0x00 {
+			t.Fatalf("unexpected socks reply status: %d", reply[1])
+		}
+	})
+
+	if called.host != "8.8.8.8" || called.port != 443 {
+		t.Fatalf("unexpected passthrough target: %s:%d", called.host, called.port)
+	}
+}
+
+func TestHandleConnInvalidAuthAggregatesSummaryWhenNotVerbose(t *testing.T) {
+	var logs bytes.Buffer
+	cfg := config.Default()
+	cfg.Username = "alice"
+	cfg.Password = "secret"
+	srv := NewServer(cfg, log.New(&logs, "", 0))
+
+	for i := 0; i < 3; i++ {
+		runHandleConnInvalidAuthAttempt(t, srv, "alice", "wrong")
+	}
+
+	if strings.Contains(logs.String(), "handshake failed: invalid username/password") {
+		t.Fatalf("expected non-verbose mode to suppress per-attempt invalid auth logs, got:\n%s", logs.String())
+	}
+
+	srv.flushAuthFailureSummary()
+	out := logs.String()
+	if !strings.Contains(out, "auth failures summary: invalid username/password x3 in 30s") {
+		t.Fatalf("expected aggregated auth failure summary, got:\n%s", out)
+	}
+}
+
+func TestHandleConnInvalidAuthLogsEachAttemptInVerboseMode(t *testing.T) {
+	var logs bytes.Buffer
+	cfg := config.Default()
+	cfg.Username = "alice"
+	cfg.Password = "secret"
+	cfg.Verbose = true
+	srv := NewServer(cfg, log.New(&logs, "", 0))
+
+	for i := 0; i < 2; i++ {
+		runHandleConnInvalidAuthAttempt(t, srv, "alice", "wrong")
+	}
+	srv.flushAuthFailureSummary()
+
+	out := logs.String()
+	if strings.Count(out, "handshake failed: invalid username/password") != 2 {
+		t.Fatalf("expected verbose mode to log each invalid auth attempt, got:\n%s", out)
+	}
+	if strings.Contains(out, "auth failures summary: invalid username/password") {
+		t.Fatalf("expected verbose mode to skip aggregated auth summary, got:\n%s", out)
 	}
 }
 

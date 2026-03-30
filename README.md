@@ -53,6 +53,11 @@ wget -O /tmp/tg-ws-proxy-go.sh https://raw.githubusercontent.com/d0mhate/-tg-ws-
 
 4. `Start in background`
 
+Если нужен `SOCKS5` логин/пароль:
+
+5. `Advanced`
+6. `Configure SOCKS5 auth`
+
 Без меню:
 
 ```bash
@@ -83,16 +88,18 @@ Script создаёт короткий launcher `tgm`. Обычно это `/usr
 - тип: `SOCKS5`
 - host: `IP роутера`
 - port: `1080`
-- username: пусто
-- password: пусто
+- username: пусто, если auth не включена
+- password: пусто, если auth не включена
 
 Если запускаете локально на той же машине:
 
 - тип: `SOCKS5`
 - host: `127.0.0.1`
 - port: `1080`
-- username: пусто
-- password: пусто
+- username: пусто, если auth не включена
+- password: пусто, если auth не включена
+
+Если в manager включены `SOCKS5` credentials, в Telegram нужно указать те же `username/password`.
 
 ## Основные команды
 
@@ -130,6 +137,12 @@ go build ./cmd/tg-ws-proxy
 
 ```bash
 ./tg-ws-proxy --host 127.0.0.1 --port 1080 --verbose
+```
+
+Запуск с `SOCKS5 auth`:
+
+```bash
+./tg-ws-proxy --host 127.0.0.1 --port 1080 --username alice --password secret --verbose
 ```
 
 Целевые OpenWrt сборки:

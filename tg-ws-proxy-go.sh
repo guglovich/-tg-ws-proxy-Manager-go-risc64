@@ -31,6 +31,8 @@ BINARY_NAME="${BINARY_NAME:-}"
 LISTEN_HOST_FROM_ENV="${LISTEN_HOST+x}"
 LISTEN_PORT_FROM_ENV="${LISTEN_PORT+x}"
 VERBOSE_FROM_ENV="${VERBOSE+x}"
+SOCKS_USERNAME_FROM_ENV="${SOCKS_USERNAME+x}"
+SOCKS_PASSWORD_FROM_ENV="${SOCKS_PASSWORD+x}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
 RELEASE_DOWNLOAD_BASE_URL="${RELEASE_DOWNLOAD_BASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download}"
 RELEASE_URL="${RELEASE_URL:-}"
@@ -56,6 +58,8 @@ LAUNCHER_PATH="${LAUNCHER_PATH:-/usr/bin/$LAUNCHER_NAME}"
 LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
 LISTEN_PORT="${LISTEN_PORT:-1080}"
 VERBOSE="${VERBOSE:-0}"
+SOCKS_USERNAME="${SOCKS_USERNAME:-}"
+SOCKS_PASSWORD="${SOCKS_PASSWORD:-}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
 PERSISTENT_SPACE_HEADROOM_KB="${PERSISTENT_SPACE_HEADROOM_KB:-2048}"
 PID_FILE="${PID_FILE:-$INSTALL_DIR/pid}"
@@ -209,6 +213,28 @@ read_config_value() {
     sed -n "s/^${key}='\(.*\)'$/\1/p" "$PERSIST_CONFIG_FILE" 2>/dev/null | head -n 1
 }
 
+write_settings_config() {
+    bin_path="${1:-}"
+
+    if [ -z "$bin_path" ]; then
+        bin_path="$(read_config_value BIN 2>/dev/null || true)"
+    fi
+
+    auth_settings_valid || return 1
+
+    mkdir -p "$PERSIST_STATE_DIR" || return 1
+    {
+        if [ -n "$bin_path" ]; then
+            printf "BIN='%s'\n" "$bin_path"
+        fi
+        printf "HOST='%s'\n" "$LISTEN_HOST"
+        printf "PORT='%s'\n" "$LISTEN_PORT"
+        printf "VERBOSE='%s'\n" "$VERBOSE"
+        printf "USERNAME='%s'\n" "$SOCKS_USERNAME"
+        printf "PASSWORD='%s'\n" "$SOCKS_PASSWORD"
+    } > "$PERSIST_CONFIG_FILE" || return 1
+}
+
 load_saved_settings() {
     [ -f "$PERSIST_CONFIG_FILE" ] || return 0
 
@@ -225,6 +251,39 @@ load_saved_settings() {
     if [ -z "$VERBOSE_FROM_ENV" ]; then
         verbose_value="$(read_config_value VERBOSE 2>/dev/null || true)"
         [ -n "$verbose_value" ] && VERBOSE="$verbose_value"
+    fi
+
+    if [ -z "$SOCKS_USERNAME_FROM_ENV" ]; then
+        SOCKS_USERNAME="$(read_config_value USERNAME 2>/dev/null || true)"
+    fi
+
+    if [ -z "$SOCKS_PASSWORD_FROM_ENV" ]; then
+        SOCKS_PASSWORD="$(read_config_value PASSWORD 2>/dev/null || true)"
+    fi
+}
+
+auth_settings_valid() {
+    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+        return 0
+    fi
+
+    if [ -z "$SOCKS_USERNAME" ] && [ -z "$SOCKS_PASSWORD" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+show_invalid_auth_settings() {
+    printf "%sSOCKS5 auth settings are incomplete%s\n\n" "$C_RED" "$C_RESET"
+    printf "SOCKS_USERNAME and SOCKS_PASSWORD must be both set or both empty.\n"
+}
+
+password_display() {
+    if [ -n "$SOCKS_PASSWORD" ]; then
+        printf "<set>"
+    else
+        printf "<empty>"
     fi
 }
 
@@ -463,8 +522,12 @@ show_telegram_settings() {
     printf "%sTelegram SOCKS5%s\n" "$C_BOLD" "$C_RESET"
     printf "  host     : %s\n" "$(telegram_host)"
     printf "  port     : %s\n" "$LISTEN_PORT"
-    printf "  username : <empty>\n"
-    printf "  password : <empty>\n"
+    if [ -n "$SOCKS_USERNAME" ]; then
+        printf "  username : %s\n" "$SOCKS_USERNAME"
+    else
+        printf "  username : <empty>\n"
+    fi
+    printf "  password : %s\n" "$(password_display)"
 }
 
 show_current_version() {
@@ -800,14 +863,7 @@ install_persistent_from_source() {
 
 write_autostart_config() {
     bin_path="$1"
-
-    mkdir -p "$PERSIST_STATE_DIR" || return 1
-    {
-        printf "BIN='%s'\n" "$bin_path"
-        printf "HOST='%s'\n" "$LISTEN_HOST"
-        printf "PORT='%s'\n" "$LISTEN_PORT"
-        printf "VERBOSE='%s'\n" "$VERBOSE"
-    } > "$PERSIST_CONFIG_FILE" || return 1
+    write_settings_config "$bin_path"
 }
 
 sync_autostart_config_if_enabled() {
@@ -838,11 +894,24 @@ write_init_script() {
         printf '%s\n' '    [ -x "$BIN" ] || return 1'
         printf '%s\n' '    [ -n "$HOST" ] || HOST="0.0.0.0"'
         printf '%s\n' '    [ -n "$PORT" ] || PORT="1080"'
+        printf '%s\n' '    USERNAME="${USERNAME:-}"'
+        printf '%s\n' '    PASSWORD="${PASSWORD:-}"'
+        printf '%s\n' '    if { [ -n "$USERNAME" ] && [ -z "$PASSWORD" ]; } || { [ -z "$USERNAME" ] && [ -n "$PASSWORD" ]; }; then'
+        printf '%s\n' '        return 1'
+        printf '%s\n' '    fi'
         printf '%s\n' '    procd_open_instance'
-        printf '%s\n' '    if [ "${VERBOSE:-0}" = "1" ]; then'
-        printf '%s\n' '        procd_set_param command "$BIN" --host "$HOST" --port "$PORT" --verbose'
+        printf '%s\n' '    if [ -n "$USERNAME" ] && [ -n "$PASSWORD" ]; then'
+        printf '%s\n' '        if [ "${VERBOSE:-0}" = "1" ]; then'
+        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT" --username "$USERNAME" --password "$PASSWORD" --verbose'
+        printf '%s\n' '        else'
+        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT" --username "$USERNAME" --password "$PASSWORD"'
+        printf '%s\n' '        fi'
         printf '%s\n' '    else'
-        printf '%s\n' '        procd_set_param command "$BIN" --host "$HOST" --port "$PORT"'
+        printf '%s\n' '        if [ "${VERBOSE:-0}" = "1" ]; then'
+        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT" --verbose'
+        printf '%s\n' '        else'
+        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT"'
+        printf '%s\n' '        fi'
         printf '%s\n' '    fi'
         printf '%s\n' '    procd_set_param respawn'
         printf '%s\n' '    procd_set_param stdout 1'
@@ -1044,35 +1113,45 @@ run_binary() {
     bin_path="$(runtime_bin_path 2>/dev/null || true)"
     [ -n "$bin_path" ] || return 1
 
-    if [ "$VERBOSE" = "1" ]; then
-        "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT" --verbose
-    else
-        "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
+    set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
+    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+        set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
     fi
+    if [ "$VERBOSE" = "1" ]; then
+        set -- "$@" --verbose
+    fi
+    "$@"
 }
 
 run_binary_background() {
     bin_path="$(runtime_bin_path 2>/dev/null || true)"
     [ -n "$bin_path" ] || return 1
 
+    set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
+    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+        set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
+    fi
+    if [ "$VERBOSE" = "1" ]; then
+        set -- "$@" --verbose
+    fi
+
     if command -v nohup >/dev/null 2>&1; then
-        if [ "$VERBOSE" = "1" ]; then
-            nohup "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT" --verbose >/dev/null 2>&1 &
-        else
-            nohup "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT" >/dev/null 2>&1 &
-        fi
+        nohup "$@" >/dev/null 2>&1 &
     else
-        if [ "$VERBOSE" = "1" ]; then
-            "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT" --verbose >/dev/null 2>&1 &
-        else
-            "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT" >/dev/null 2>&1 &
-        fi
+        "$@" >/dev/null 2>&1 &
     fi
 
     printf "%s" "$!"
 }
 
 start_proxy() {
+    if ! auth_settings_valid; then
+        show_header
+        show_invalid_auth_settings
+        pause
+        return 1
+    fi
+
     bin_path="$(runtime_bin_path 2>/dev/null || true)"
     if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
         show_header
@@ -1124,6 +1203,13 @@ start_proxy() {
 }
 
 start_proxy_background() {
+    if ! auth_settings_valid; then
+        show_header
+        show_invalid_auth_settings
+        pause
+        return 1
+    fi
+
     bin_path="$(runtime_bin_path 2>/dev/null || true)"
     if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
         show_header
@@ -1179,6 +1265,12 @@ enable_autostart() {
     show_header
     started_now="0"
     start_note=""
+
+    if ! auth_settings_valid; then
+        show_invalid_auth_settings
+        pause
+        return 1
+    fi
 
     if ! is_openwrt; then
         printf "%sAutostart is only supported on OpenWrt%s\n" "$C_RED" "$C_RESET"

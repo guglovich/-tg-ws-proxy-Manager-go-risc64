@@ -208,6 +208,20 @@ func main() {
 	}
 }
 
+func writeCapturingProxyScript(t *testing.T, path string) {
+	t.Helper()
+	writeFile(t, path, `#!/bin/sh
+if [ -n "${ARGS_FILE:-}" ]; then
+  mkdir -p "$(dirname "$ARGS_FILE")"
+  printf '%s\n' "$@" > "$ARGS_FILE"
+fi
+trap 'exit 0' TERM INT
+while :; do
+  sleep 1
+done
+`, 0o755)
+}
+
 func waitForMenuText(t *testing.T, env []string, want string) string {
 	t.Helper()
 
@@ -224,6 +238,20 @@ func waitForMenuText(t *testing.T, env []string, want string) string {
 
 	t.Fatalf("timed out waiting for menu text %q\nlast output:\n%s", want, lastOut)
 	return ""
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for file %s", path)
 }
 
 func TestManagerEnableAutostartInstallsPersistentCopy(t *testing.T) {

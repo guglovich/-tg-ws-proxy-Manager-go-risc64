@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 jobs:
-  test-and-build:
+  test:
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: 0
@@ -38,15 +38,133 @@ jobs:
           plugins: noop
           verbose: true
 
+  build-local:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6
+
+      - name: setup go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+          cache: false
+
       - name: build local binary
         run: go build ./cmd/tg-ws-proxy
 
-      - name: build openwrt binaries
+  build-openwrt:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: tg-ws-proxy-openwrt-mipsel_24kc
+            goarch: mipsle
+            gomips: softfloat
+            file_match: "MIPS"
+          - asset: tg-ws-proxy-openwrt-mips_24kc
+            goarch: mips
+            gomips: softfloat
+            file_match: "MIPS"
+          - asset: tg-ws-proxy-openwrt-x86_64
+            goarch: amd64
+            file_match: "x86-64"
+          - asset: tg-ws-proxy-openwrt-armv7
+            goarch: arm
+            goarm: "7"
+            file_match: "ARM"
+          - asset: tg-ws-proxy-openwrt-aarch64
+            goarch: arm64
+            file_match: "AArch64"
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6
+
+      - name: setup go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: build target binary
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm || '' }}
+          GOMIPS: ${{ matrix.gomips || '' }}
+          OUTPUT: build/${{ matrix.asset }}
         run: |
           mkdir -p build
-          GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-mipsel_24kc ./cmd/tg-ws-proxy
-          GOOS=linux GOARCH=mips GOMIPS=softfloat go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-mips_24kc ./cmd/tg-ws-proxy
-          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-x86_64 ./cmd/tg-ws-proxy
-          GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-armv7 ./cmd/tg-ws-proxy
-          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-aarch64 ./cmd/tg-ws-proxy
-          cp build/tg-ws-proxy-openwrt-mipsel_24kc build/tg-ws-proxy-openwrt
+          go build -trimpath -ldflags="-s -w" -o "$OUTPUT" ./cmd/tg-ws-proxy
+
+      - name: inspect target binary
+        env:
+          OUTPUT: build/${{ matrix.asset }}
+          FILE_MATCH: ${{ matrix.file_match }}
+        run: |
+          test -s "$OUTPUT"
+          file "$OUTPUT" | tee /tmp/file-output.txt
+          grep -q "$FILE_MATCH" /tmp/file-output.txt
+          if readelf -l "$OUTPUT" | grep -q "Requesting program interpreter"; then
+            echo "dynamic loader detected in $OUTPUT"
+            readelf -l "$OUTPUT"
+            exit 1
+          fi
+
+      - name: upload target artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: build/${{ matrix.asset }}
+
+  verify-openwrt-artifacts:
+    needs: build-openwrt
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: download all openwrt artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: build
+
+      - name: verify expected artifact names
+        run: |
+          test -f build/tg-ws-proxy-openwrt-mipsel_24kc/tg-ws-proxy-openwrt-mipsel_24kc
+          test -f build/tg-ws-proxy-openwrt-mips_24kc/tg-ws-proxy-openwrt-mips_24kc
+          test -f build/tg-ws-proxy-openwrt-x86_64/tg-ws-proxy-openwrt-x86_64
+          test -f build/tg-ws-proxy-openwrt-armv7/tg-ws-proxy-openwrt-armv7
+          test -f build/tg-ws-proxy-openwrt-aarch64/tg-ws-proxy-openwrt-aarch64
+
+  smoke-openwrt-x86_64:
+    needs: build-openwrt
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: download x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tg-ws-proxy-openwrt-x86_64
+          path: build
+
+      - name: smoke-run x86_64 binary
+        run: |
+          chmod +x build/tg-ws-proxy-openwrt-x86_64
+          set +e
+          timeout 3s build/tg-ws-proxy-openwrt-x86_64 -host 127.0.0.1 -port 0 -verbose > /tmp/smoke.log 2>&1
+          rc=$?
+          set -e
+          cat /tmp/smoke.log
+          if [ "$rc" -ne 124 ]; then
+            echo "unexpected exit code: $rc"
+            exit 1
+          fi
+          grep -q "listening on" /tmp/smoke.log

@@ -29,14 +29,13 @@ jobs:
       - name: test with coverage
         run: go test -coverprofile=coverage.out ./...
 
-      - name: upload coverage to codecov
-        uses: codecov/codecov-action@v5.4.2
+      - name: upload coverage to coveralls
+        uses: coverallsapp/github-action@v2.3.6
         with:
-          files: ./coverage.out
-          use_oidc: true
-          fail_ci_if_error: false
-          plugins: noop
-          verbose: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./coverage.out
+          format: golang
+          fail-on-error: false
 
   build-local:
     needs: test

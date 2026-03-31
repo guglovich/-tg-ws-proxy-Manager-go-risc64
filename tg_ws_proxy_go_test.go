@@ -210,16 +210,50 @@ func main() {
 
 func writeCapturingProxyScript(t *testing.T, path string) {
 	t.Helper()
-	writeFile(t, path, `#!/bin/sh
-if [ -n "${ARGS_FILE:-}" ]; then
-  mkdir -p "$(dirname "$ARGS_FILE")"
-  printf '%s\n' "$@" > "$ARGS_FILE"
-fi
-trap 'exit 0' TERM INT
-while :; do
-  sleep 1
-done
-`, 0o755)
+
+	source := filepath.Join(t.TempDir(), "main.go")
+	writeFile(t, source, `package main
+
+import (
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+)
+
+func main() {
+	if argsFile := os.Getenv("ARGS_FILE"); argsFile != "" {
+		_ = os.MkdirAll(filepath.Dir(argsFile), 0o755)
+		_ = os.WriteFile(argsFile, []byte(joinArgs(os.Args[1:])), 0o644)
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	<-sigCh
+}
+
+func joinArgs(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	out := args[0]
+	for _, arg := range args[1:] {
+		out += "\n" + arg
+	}
+	return out
+}
+`, 0o644)
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir capturing proxy dir: %v", err)
+	}
+
+	cmd := exec.Command("go", "build", "-o", path, source)
+	cmd.Dir = "."
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build capturing proxy binary: %v\n%s", err, string(out))
+	}
 }
 
 func waitForMenuText(t *testing.T, env []string, want string) string {

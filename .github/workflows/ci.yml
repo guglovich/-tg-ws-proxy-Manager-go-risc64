@@ -83,7 +83,7 @@ jobs:
             file_match: "ARM"
           - asset: tg-ws-proxy-openwrt-aarch64
             goarch: arm64
-            file_match: "AArch64"
+            file_match: "aarch64"
 
     steps:
       - name: checkout

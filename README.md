@@ -11,9 +11,6 @@
 > - Автор не несёт ответственности за возможные проблемы в работе роутера, или сети
 
 > [!WARNING]
-> - Этот вариант сделан для OpenWrt и проверен на `mipsel_24kc`
-> - Manager script автоматически выбирает release asset для `mipsel_24kc`, `mips_24kc`, `armv7`, `aarch64` и `x86_64`
-> - На других архитектурах или сборках OpenWrt бинарник может не подойти
 > - Перед установкой script проверяет архитектуру, свободное место в `/tmp` и доступность release
 
 Лёгкая Go версия `tg-ws-proxy` для OpenWrt без Python runtime и desktop-обвязки.
@@ -164,23 +161,6 @@ go build ./cmd/tg-ws-proxy
 ./tg-ws-proxy --host 127.0.0.1 --port 1080 --username alice --password secret --verbose
 ```
 
-Целевые OpenWrt сборки:
-
-```bash
-GOOS=linux GOARCH=mipsle GOMIPS=softfloat
-GOOS=linux GOARCH=mips GOMIPS=softfloat
-GOOS=linux GOARCH=arm GOARM=7
-GOOS=linux GOARCH=arm64
-GOOS=linux GOARCH=amd64
-```
-
-Проверенная цель:
-
-- `Xiaomi Mi Router 4A Gigabit Edition v2`
-- `OpenWrt 24.10.5`
-- `ramips/mt7621`
-- `mipsel_24kc`
-
 ## Тесты
 
 ```bash
@@ -207,7 +187,3 @@ go test ./...
 [MIT License](LICENSE)
 
 ---
-
-*принадлежит компании Meta, признанной экстремистской и запрещённой на территории РФ*
-
-Данный репозиторий создан исключительно как пример и для ознакомительных целей, автор не несёт ответственности за использование проекта, его настройку, запуск и возможные последствия, а вся ответственность за такие действия лежит на пользователе.
